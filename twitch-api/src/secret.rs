@@ -7,6 +7,16 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct Secret(String);
 
+impl Secret {
+    pub fn new(value: impl ToString) -> Self {
+        Self(value.to_string())
+    }
+
+    pub fn access_secret_value(&self) -> &str {
+        &self.0
+    }
+}
+
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&"*".repeat(self.0.len()))

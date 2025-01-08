@@ -43,7 +43,7 @@ impl TokenConfig {
     }
 
     fn env() -> PathBuf {
-        from_env("TWITCH_CLIENT_CONFIG", "client-config.toml")
+        from_env("TWITCH_TOKEN_DATA", "token-data.toml")
     }
 
     pub(crate) fn load_from_env() -> Result<Self> {

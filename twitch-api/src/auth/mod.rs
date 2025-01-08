@@ -2,12 +2,11 @@ use std::io;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     client::{Client, FormEncoding, Request},
-    config::ClientConfig,
+    config::{ClientConfig, TokenConfig},
     secret::Secret,
 };
 
@@ -20,7 +19,7 @@ pub use self::token_manager::TokenManager;
 pub struct Auth {}
 
 fn mock() -> bool {
-    true
+    !cfg!(feature = "no-mock")
 }
 
 impl Auth {
@@ -38,7 +37,7 @@ impl Auth {
                 expires_in: Default::default(),
                 interval: Default::default(),
                 user_code: Default::default(),
-                verification_uri: Url::parse("https://mgjm.dev").context("invalid mock url")?,
+                verification_uri: Secret::new("https://mgjm.dev"),
             }
         } else {
             client
@@ -51,7 +50,7 @@ impl Auth {
         };
 
         eprintln!("{res:#?}");
-        println!("{}", res.verification_uri);
+        println!("{}", res.verification_uri.access_secret_value());
 
         {
             eprint!("Press ENTER once authenticated using the provided URL: ");
@@ -88,6 +87,13 @@ impl Auth {
         };
 
         eprintln!("{res:#?}");
+
+        TokenConfig {
+            access_token: res.access_token,
+            refresh_token: res.refresh_token,
+        }
+        .save_to_env()
+        .context("save tokens")?;
 
         Ok(())
     }
@@ -126,7 +132,7 @@ pub struct DeviceResponse {
     user_code: Secret,
 
     /// The address you will send users to, to authenticate
-    verification_uri: Url,
+    verification_uri: Secret,
 }
 
 #[derive(Debug, Serialize)]
