@@ -5,6 +5,7 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod follower;
 pub mod pagination;
 pub mod secret;

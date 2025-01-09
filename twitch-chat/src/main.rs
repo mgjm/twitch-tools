@@ -4,6 +4,7 @@ use tokio::task::LocalSet;
 use twitch_api::{
     auth::{self, Scope},
     client::Client,
+    events::ws::WebSocket,
     follower::ChannelFollowersRequest,
     user::UsersRequest,
 };
@@ -63,6 +64,9 @@ impl cmd::Run {
             .total;
 
         eprintln!("followers: {followers}");
+
+        let ws = WebSocket::connect().await?;
+        eprintln!("websocket: {:?}", ws.session_id());
 
         Ok(())
     }
