@@ -12,6 +12,7 @@ CLI and TUI tools to interact with the Twitch API.
 ## Libraries
 
 - [`twitch-api`](twitch-api): Common library to interact and authenticate with the Twitch API.
+- [`sound-fx-3000`](sound-fx-3000): Sound playback library to decode MP3 and play pulse audio.
 
 
 ## License
