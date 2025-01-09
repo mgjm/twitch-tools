@@ -30,8 +30,12 @@ impl TokenManager {
             refresh_token: config.refresh_token,
         }
     }
-    pub fn access_token(&self) -> Secret {
-        self.access_token.clone()
+    pub fn access_token(&self) -> &Secret {
+        &self.access_token
+    }
+
+    pub fn client_id(&self) -> &Secret {
+        &self.client_id
     }
 
     fn config(&self) -> TokenConfig {
@@ -46,6 +50,7 @@ impl TokenManager {
     }
 
     pub async fn update(&mut self, client: &mut Client) -> Result<()> {
+        eprintln!("token manager: update access token");
         let res = client
             .send(&TokenRequest {
                 client_id: self.client_id.clone(),

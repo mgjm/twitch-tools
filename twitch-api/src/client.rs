@@ -19,7 +19,13 @@ impl AuthenticatedClient {
     {
         match self
             .client
-            .send_inner(req, Some(self.token_manager.access_token()))
+            .send_inner(
+                req,
+                Some((
+                    self.token_manager.access_token(),
+                    self.token_manager.client_id(),
+                )),
+            )
             .await
         {
             Err(ApiError::ErrorResponse(StatusCode::UNAUTHORIZED, res))
@@ -27,7 +33,13 @@ impl AuthenticatedClient {
             {
                 self.token_manager.update(&mut self.client).await?;
                 self.client
-                    .send_inner(req, Some(self.token_manager.access_token()))
+                    .send_inner(
+                        req,
+                        Some((
+                            self.token_manager.access_token(),
+                            self.token_manager.client_id(),
+                        )),
+                    )
                     .await
             }
             res => res,
@@ -70,7 +82,11 @@ impl Client {
         self.send_inner(req, None).await
     }
 
-    async fn send_inner<T>(&self, req: &T, access_token: Option<Secret>) -> Result<T::Response>
+    async fn send_inner<T>(
+        &self,
+        req: &T,
+        access_token_and_client_id: Option<(&Secret, &Secret)>,
+    ) -> Result<T::Response>
     where
         T: Request,
     {
@@ -78,7 +94,7 @@ impl Client {
             .client
             .request(T::Encoding::METHOD, req.url())
             .encode(req)
-            .access_token(access_token)
+            .access_token_and_client_id(access_token_and_client_id)
             .send()
             .await
             .map_err(ApiError::SendRequest)?;
@@ -106,7 +122,10 @@ trait RequestBuilderExt {
     where
         T: Request;
 
-    fn access_token(self, access_token: Option<Secret>) -> Self;
+    fn access_token_and_client_id(
+        self,
+        access_token_and_client_id: Option<(&Secret, &Secret)>,
+    ) -> Self;
 }
 
 impl RequestBuilderExt for RequestBuilder {
@@ -117,9 +136,13 @@ impl RequestBuilderExt for RequestBuilder {
         T::Encoding::encode(self, req)
     }
 
-    fn access_token(self, access_token: Option<Secret>) -> Self {
-        if let Some(access_token) = access_token {
-            self.header(header::AUTHORIZATION, access_token)
+    fn access_token_and_client_id(
+        self,
+        access_token_and_client_id: Option<(&Secret, &Secret)>,
+    ) -> Self {
+        if let Some((access_token, client_id)) = access_token_and_client_id {
+            self.header(header::AUTHORIZATION, access_token.bearer())
+                .header("Client-Id", client_id)
         } else {
             self
         }

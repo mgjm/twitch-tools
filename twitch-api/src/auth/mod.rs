@@ -23,11 +23,11 @@ fn mock() -> bool {
 }
 
 impl Auth {
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(self, scopes: impl IntoIterator<Item = Scope>) -> Result<()> {
         let config = ClientConfig::load_from_env()?;
         eprintln!("{config:#?}");
 
-        let scopes = Scopes::from_iter([]);
+        let scopes = Scopes::from_iter(scopes);
 
         let client = Client::new();
 

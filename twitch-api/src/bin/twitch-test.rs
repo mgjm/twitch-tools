@@ -24,7 +24,7 @@ async fn run() -> Result<()> {
 
     match cmd {
         Cmd::Version(cmd) => cmd.run(),
-        Cmd::Auth(cmd) => cmd.run().await,
+        Cmd::Auth(cmd) => cmd.run([]).await,
     }
 }
 
