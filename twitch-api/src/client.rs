@@ -1,4 +1,6 @@
-use reqwest::{IntoUrl, Method, RequestBuilder, StatusCode, header};
+use std::any::Any;
+
+use reqwest::{IntoUrl, Method, RequestBuilder, Response, StatusCode, header};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -102,9 +104,7 @@ impl Client {
         let status = res.status();
 
         if status.is_success() {
-            res.json::<T::Response>()
-                .await
-                .map_err(ApiError::ParseReponse)
+            T::Encoding::decode(res).await
         } else if status.is_client_error() || status.is_server_error() {
             let res = res
                 .json::<ErrorResponse>()
@@ -151,7 +151,7 @@ impl RequestBuilderExt for RequestBuilder {
 
 pub trait Request: Serialize {
     type Encoding: Encoding;
-    type Response: DeserializeOwned;
+    type Response: DeserializeOwned + 'static;
 
     fn url(&self) -> impl IntoUrl;
 }
@@ -160,6 +160,17 @@ pub trait Encoding {
     const METHOD: Method;
 
     fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder;
+
+    #[expect(async_fn_in_trait)]
+    async fn decode<T>(res: Response) -> Result<T>
+    where
+        T: DeserializeOwned + 'static,
+    {
+        if !matches!(res.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+            return Err(ApiError::UnexpectedApiStatus(res.status()));
+        }
+        res.json::<T>().await.map_err(ApiError::ParseReponse)
+    }
 }
 
 pub enum UrlParamEncoding {}
@@ -169,6 +180,30 @@ impl Encoding for UrlParamEncoding {
 
     fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder {
         builder.query(req)
+    }
+}
+
+pub enum DeleteUrlParamEncoding {}
+
+impl Encoding for DeleteUrlParamEncoding {
+    const METHOD: Method = Method::DELETE;
+
+    fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder {
+        builder.query(req)
+    }
+
+    async fn decode<T>(res: Response) -> Result<T>
+    where
+        T: DeserializeOwned + 'static,
+    {
+        if res.status() != StatusCode::NO_CONTENT {
+            return Err(ApiError::UnexpectedApiStatus(res.status()));
+        }
+        let value: Box<dyn Any> = Box::new(());
+        Ok(*value
+            .downcast()
+            .ok()
+            .expect("delete url param encoding only works with ()"))
     }
 }
 

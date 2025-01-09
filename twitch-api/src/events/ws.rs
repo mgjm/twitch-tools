@@ -7,6 +7,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message as
 
 use crate::secret::Secret;
 
+use super::subscription::SubscriptionStatus;
+
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub struct WebSocket {
@@ -45,9 +47,12 @@ impl WebSocket {
                     anyhow::bail!("unexpected welcome message: {message:?}")
                 }
                 Message::SessionKeepalive(_message) => {
-                    eprintln!("session keepalive message");
+                    // eprintln!("session keepalive message");
                 }
-                Message::Notification(message) => return Ok(Some(message)),
+                Message::Notification(message) => {
+                    eprintln!("{message:#?}");
+                    return Ok(Some(message));
+                }
             }
         }
 
@@ -67,9 +72,9 @@ impl WebSocket {
                 WsMessage::Text(data) => {
                     let message: WebSocketMessage =
                         serde_json::from_str(data.as_str()).context("parse websocket message")?;
-                    eprintln!("received message: {:#?}", message.metadata);
+                    // eprintln!("received message: {:#?}", message.metadata);
                     let message = Message::from_message(message)?;
-                    eprintln!("{message:#?}");
+                    // eprintln!("{message:#?}");
                     return Ok(Some(message));
                 }
                 WsMessage::Binary(data) => {
@@ -133,6 +138,14 @@ pub struct WebSocketMetadata {
 
     /// The UTC date and time that the message was sent.
     pub message_timestamp: String,
+
+    /// The type of event sent in the message.
+    #[serde(default)]
+    pub subscription_type: Option<String>,
+
+    /// The version number of the subscription type’s definition. This is the same value specified in the subscription request.
+    #[serde(default)]
+    pub subscription_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -147,6 +160,7 @@ impl Message {
         Ok(match message.metadata.message_type.as_str() {
             "session_welcome" => Self::SessionWelcome(message.payload()?),
             "session_keepalive" => Self::SessionKeepalive(message.payload()?),
+            "notification" => Self::Notification(message.payload()?),
             message_type => anyhow::bail!("unknown message type: {message_type:?}"),
         })
     }
@@ -185,5 +199,51 @@ pub struct SessionInfo {
 #[serde(deny_unknown_fields)]
 pub struct SessionKeepaliveMessage {}
 
-#[derive(Debug)]
-pub struct NotificationMessage {}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationMessage {
+    /// An object that contains information about your subscription.
+    subscription: SubscriptionInfo,
+
+    /// The event’s data. For information about the event’s data, see the subscription type’s description in Subscription Types.
+    event: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionInfo {
+    /// An ID that uniquely identifies this subscription.
+    id: Secret,
+
+    /// The subscription’s status, which is set to enabled.
+    status: SubscriptionStatus,
+
+    /// The type of event sent in the message. See the event field.
+    #[serde(rename = "type")]
+    type_: String,
+
+    /// The version number of the subscription type’s definition.
+    version: String,
+
+    /// The event’s cost. See Subscription limits.
+    cost: u32,
+
+    /// The conditions under which the event fires. For example, if you requested notifications when a broadcaster gets a new follower, this object contains the broadcaster’s ID. For information about the condition’s data, see the subscription type’s description in Subscription types.
+    condition: Value,
+
+    /// An object that contains information about the transport used for notifications.
+    transport: TransportInfo,
+
+    /// The UTC date and time that the subscription was created.
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransportInfo {
+    /// The transport method, which is set to websocket.
+    method: String,
+
+    /// An ID that uniquely identifies the WebSocket connection.
+    session_id: Secret,
+}

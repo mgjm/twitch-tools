@@ -10,3 +10,5 @@ pub mod follower;
 pub mod pagination;
 pub mod secret;
 pub mod user;
+
+pub use serde_json::json;
