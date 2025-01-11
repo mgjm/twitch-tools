@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     client::{Request, UrlParamEncoding},
-    events::stream::StreamType,
     pagination::Pagination,
     secret::Secret,
 };
@@ -122,7 +121,7 @@ pub struct Stream {
     ///
     /// If an error occurs, this field is set to an empty string.
     #[serde(rename = "type")]
-    pub type_: StreamType,
+    pub type_: String,
 
     /// The stream’s title. Is an empty string if not set.
     pub title: String,

@@ -6,6 +6,7 @@ use crossterm::style::{Color, Stylize};
 use tokio::task::LocalSet;
 use twitch_api::{
     auth::{self, Scope},
+    channel::{Channel, ChannelsRequest},
     chat::ChatColorsRequest,
     client::Client,
     events::{
@@ -148,19 +149,31 @@ impl cmd::Run {
             .context("create subscription")?;
         eprintln!("{res:#?}");
 
+        if let Some(stream) = client
+            .send(&StreamsRequest::user_id(user.id.clone()))
+            .await
+            .context("load stream info")?
+            .into_stream()
         {
-            let stream = client
-                .send(&StreamsRequest::user_id(user.id.clone()))
-                .await
-                .context("load stream info")?
-                .into_stream()
-                .context("missing stream")?;
             let timestamp = stream.started_at.with_timezone(&chrono_tz::Europe::Berlin);
             println!(
                 "{} {} {}",
                 timestamp.format("%T").to_string().dark_grey(),
                 "stream already online".italic().green(),
                 stream_info(&stream),
+            );
+        } else {
+            let channel = client
+                .send(&ChannelsRequest::id(user.id.clone()))
+                .await
+                .context("load channel info")?
+                .into_channel()
+                .context("missing channel")?;
+            println!(
+                "{} {} {}",
+                "--:--:--".dark_grey(),
+                "stream is offline".italic().red(),
+                channel_info(&channel),
             );
         }
 
@@ -218,17 +231,18 @@ impl cmd::Run {
                 let _ = offline;
 
                 let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
-                let stream = client
-                    .send(&StreamsRequest::user_id(user.id.clone()))
+                let _ = dbg!(client.send(&StreamsRequest::user_id(user.id.clone())).await);
+                let channel = client
+                    .send(&ChannelsRequest::id(user.id.clone()))
                     .await
-                    .context("load stream info")?
-                    .into_stream()
-                    .context("missing stream")?;
+                    .context("load channel info")?
+                    .into_channel()
+                    .context("missing channel")?;
                 println!(
                     "{} {} {}",
                     timestamp.format("%T").to_string().dark_grey(),
                     "stream went offline".italic().red(),
-                    stream_info(&stream),
+                    channel_info(&channel),
                 );
             } else {
                 eprintln!("unknown notification event: {notification:#?}");
@@ -240,18 +254,36 @@ impl cmd::Run {
 }
 
 fn stream_info(stream: &Stream) -> String {
+    stream_or_channel_info(
+        &stream.title,
+        &stream.tags,
+        &stream.game_name,
+        &stream.language,
+    )
+}
+
+fn channel_info(channel: &Channel) -> String {
+    stream_or_channel_info(
+        &channel.title,
+        &channel.tags,
+        &channel.game_name,
+        &channel.broadcaster_language,
+    )
+}
+
+fn stream_or_channel_info(title: &str, tags: &[String], game_name: &str, language: &str) -> String {
     use std::fmt::Write as _;
 
     let mut info = String::new();
 
     let mut append_info = |key: &str, value: &str| {
-        write!(info, "\n         {} {}", key.dark_grey(), value).unwrap();
+        write!(info, "\n   {} {}", key.dark_grey(), value).unwrap();
     };
 
-    append_info("Title   ", &stream.title);
-    append_info("Tags    ", &stream.tags.join(", "));
-    append_info("Category", &stream.game_name);
-    append_info("Language", &stream.language);
+    append_info("Title   ", title);
+    append_info("Tags    ", &tags.join(", "));
+    append_info("Category", game_name);
+    append_info("Language", language);
     info
 }
 
