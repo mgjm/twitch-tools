@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::client::{Request, UrlParamEncoding};
+use crate::client::{JsonEncoding, Request, UrlParamEncoding};
 
 #[derive(Debug, Serialize)]
 pub struct ChatColorsRequest {
@@ -53,4 +53,65 @@ pub struct ChatColor {
 
     /// The Hex color code that the user uses in chat for their name. If the user hasn’t specified a color in their settings, the string is empty.
     pub color: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SendChatMessageRequest {
+    /// The ID of the broadcaster whose chat room the message will be sent to.
+    pub broadcaster_id: String,
+
+    /// The ID of the user sending the message. This ID must match the user ID in the user access token.
+    pub sender_id: String,
+
+    /// The message to send. The message is limited to a maximum of 500 characters. Chat messages can also include emoticons. To include emoticons, use the name of the emote. The names are case sensitive. Don’t include colons around the name (e.g., :bleedPurple:). If Twitch recognizes the name, Twitch converts the name to the emote before writing the chat message to the chat room
+    pub message: String,
+
+    /// The ID of the chat message being replied to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_parent_message_id: Option<String>,
+}
+
+impl Request for SendChatMessageRequest {
+    type Encoding = JsonEncoding;
+    type Response = SendChatMessagesResponse;
+
+    fn url(&self) -> impl reqwest::IntoUrl {
+        twitch_helix!("/chat/messages")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendChatMessagesResponse {
+    data: Vec<SentChatMessage>,
+}
+
+impl SendChatMessagesResponse {
+    pub fn into_chat_message(mut self) -> Option<SentChatMessage> {
+        if self.data.len() > 1 {
+            unreachable!("mulitple chat messages returned");
+        }
+        self.data.pop()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SentChatMessage {
+    /// The message id for the message that was sent.
+    pub message_id: String,
+
+    /// If the message passed all checks and was sent.
+    pub is_sent: bool,
+
+    /// The reason the message was dropped, if any.
+    #[serde(default)]
+    pub drop_reason: Option<SentChatMessageDropReason>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SentChatMessageDropReason {
+    /// Code for why the message was dropped.
+    pub code: String,
+
+    /// Message for why the message was dropped.
+    pub message: String,
 }

@@ -1,13 +1,17 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::{
+    hash::{DefaultHasher, Hash, Hasher},
+    io,
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Error, Result};
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use crossterm::style::{Color, Stylize};
-use tokio::task::LocalSet;
+use tokio::{sync::mpsc, task::LocalSet};
 use twitch_api::{
     auth::{self, Scope},
     channel::{Channel, ChannelsRequest},
-    chat::ChatColorsRequest,
+    chat::{ChatColorsRequest, SendChatMessageRequest},
     client::Client,
     events::{
         chat::{ChatMessage, ChatMessageCondition},
@@ -17,7 +21,7 @@ use twitch_api::{
             CreateSubscriptionRequest, DeleteSubscriptionRequest, GetSubscriptionsRequest,
             TransportRequest,
         },
-        ws::WebSocket,
+        ws::{NotificationMessage, WebSocket},
     },
     follower::ChannelFollowersRequest,
     secret::Secret,
@@ -177,75 +181,144 @@ impl cmd::Run {
             );
         }
 
-        while let Some((timestamp, notification)) = ws.next().await? {
-            if let Some(message) = notification.event::<ChatMessage>()? {
-                sound_system.play_sound_for_event(Event::Message);
-                // eprintln!("{message:#?}");
+        let (sender, mut receiver) = mpsc::unbounded_channel();
 
-                let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
-                let color = parse_color(&message.color, &message.chatter_user_id);
-                println!(
-                    "{} {} {}",
-                    timestamp.format("%T").to_string().dark_grey(),
-                    message.chatter_user_name.with(color).bold(),
-                    message.message.text,
-                );
-            } else if let Some(follow) = notification.event::<Follow>()? {
-                sound_system.play_sound_for_event(Event::Follow);
-                // eprintln!("{follow:#?}");
+        {
+            let sender = sender.clone();
+            tokio::task::spawn_local(async move {
+                loop {
+                    let item = match ws.next().await {
+                        Ok(None) => break,
+                        Ok(Some((timestamp, notification))) => Item::Notification {
+                            timestamp,
+                            notification,
+                        },
+                        Err(err) => Item::WebSocketError(err),
+                    };
+                    if sender.send(item).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
-                let timestamp = follow.followed_at.with_timezone(&chrono_tz::Europe::Berlin);
-                let follower = client
-                    .send(&ChatColorsRequest::id(follow.user_id.clone()))
-                    .await
-                    .context("load chat color for follow message")?
-                    .into_chat_color()
-                    .context("unable to load char color for follow message")?;
-                let color = parse_color(&follower.color, &follow.user_id);
-                println!(
-                    "{} {} {}",
-                    timestamp.format("%T").to_string().dark_grey(),
-                    follow.user_name.with(color).bold(),
-                    "has followed you".italic(),
-                );
-            } else if let Some(online) = notification.event::<StreamOnline>()? {
-                sound_system.play_sound_for_event(Event::Online);
-                // eprintln!("{online:#?}");
+        tokio::task::spawn_blocking(move || {
+            for line in io::stdin().lines() {
+                let item = match line {
+                    Ok(message) => {
+                        let _ = crossterm::execute!(
+                            io::stdout(),
+                            crossterm::cursor::MoveUp(1),
+                            crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+                        );
+                        if message.is_empty() {
+                            continue;
+                        }
+                        Item::SendMessage { message }
+                    }
+                    Err(err) => Item::StdinError(err),
+                };
+                if sender.send(item).is_err() {
+                    break;
+                }
+            }
+        });
 
-                let timestamp = online.started_at.with_timezone(&chrono_tz::Europe::Berlin);
-                let stream = client
-                    .send(&StreamsRequest::user_id(user.id.clone()))
-                    .await
-                    .context("load stream info")?
-                    .into_stream()
-                    .context("missing stream")?;
-                println!(
-                    "{} {} {}",
-                    timestamp.format("%T").to_string().dark_grey(),
-                    "stream went online".italic().green(),
-                    stream_info(&stream),
-                );
-            } else if let Some(offline) = notification.event::<StreamOffline>()? {
-                sound_system.play_sound_for_event(Event::Offline);
-                // eprintln!("{offline:#?}");
-                let _ = offline;
+        while let Some(item) = receiver.recv().await {
+            match item {
+                Item::Notification {
+                    timestamp,
+                    notification,
+                } => {
+                    if let Some(message) = notification.event::<ChatMessage>()? {
+                        sound_system.play_sound_for_event(Event::Message);
+                        // eprintln!("{message:#?}");
 
-                let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
-                let _ = dbg!(client.send(&StreamsRequest::user_id(user.id.clone())).await);
-                let channel = client
-                    .send(&ChannelsRequest::id(user.id.clone()))
-                    .await
-                    .context("load channel info")?
-                    .into_channel()
-                    .context("missing channel")?;
-                println!(
-                    "{} {} {}",
-                    timestamp.format("%T").to_string().dark_grey(),
-                    "stream went offline".italic().red(),
-                    channel_info(&channel),
-                );
-            } else {
-                eprintln!("unknown notification event: {notification:#?}");
+                        let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                        let color = parse_color(&message.color, &message.chatter_user_id);
+                        println!(
+                            "{} {} {}",
+                            timestamp.format("%T").to_string().dark_grey(),
+                            message.chatter_user_name.with(color).bold(),
+                            message.message.text,
+                        );
+                    } else if let Some(follow) = notification.event::<Follow>()? {
+                        sound_system.play_sound_for_event(Event::Follow);
+                        // eprintln!("{follow:#?}");
+
+                        let timestamp =
+                            follow.followed_at.with_timezone(&chrono_tz::Europe::Berlin);
+                        let follower = client
+                            .send(&ChatColorsRequest::id(follow.user_id.clone()))
+                            .await
+                            .context("load chat color for follow message")?
+                            .into_chat_color()
+                            .context("unable to load char color for follow message")?;
+                        let color = parse_color(&follower.color, &follow.user_id);
+                        println!(
+                            "{} {} {}",
+                            timestamp.format("%T").to_string().dark_grey(),
+                            follow.user_name.with(color).bold(),
+                            "has followed you".italic(),
+                        );
+                    } else if let Some(online) = notification.event::<StreamOnline>()? {
+                        sound_system.play_sound_for_event(Event::Online);
+                        // eprintln!("{online:#?}");
+
+                        let timestamp = online.started_at.with_timezone(&chrono_tz::Europe::Berlin);
+                        let stream = client
+                            .send(&StreamsRequest::user_id(user.id.clone()))
+                            .await
+                            .context("load stream info")?
+                            .into_stream()
+                            .context("missing stream")?;
+                        println!(
+                            "{} {} {}",
+                            timestamp.format("%T").to_string().dark_grey(),
+                            "stream went online".italic().green(),
+                            stream_info(&stream),
+                        );
+                    } else if let Some(offline) = notification.event::<StreamOffline>()? {
+                        sound_system.play_sound_for_event(Event::Offline);
+                        // eprintln!("{offline:#?}");
+                        let _ = offline;
+
+                        let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                        let _ = dbg!(client.send(&StreamsRequest::user_id(user.id.clone())).await);
+                        let channel = client
+                            .send(&ChannelsRequest::id(user.id.clone()))
+                            .await
+                            .context("load channel info")?
+                            .into_channel()
+                            .context("missing channel")?;
+                        println!(
+                            "{} {} {}",
+                            timestamp.format("%T").to_string().dark_grey(),
+                            "stream went offline".italic().red(),
+                            channel_info(&channel),
+                        );
+                    } else {
+                        eprintln!("unknown notification event: {notification:#?}");
+                    }
+                }
+                Item::SendMessage { message } => {
+                    let message = client
+                        .send(&SendChatMessageRequest {
+                            broadcaster_id: user.id.clone(),
+                            sender_id: user.id.clone(),
+                            message,
+                            reply_parent_message_id: None,
+                        })
+                        .await
+                        .context("send message")?
+                        .into_chat_message()
+                        .context("missing chat message")?;
+                    if !message.is_sent {
+                        eprintln!("{message:#?}");
+                    }
+                }
+                Item::WebSocketError(err) => return Err(err).context("receive next notification"),
+                Item::StdinError(err) => return Err(err).context("read message from stdin"),
             }
         }
 
@@ -379,4 +452,16 @@ impl cmd::Eventsub {
 
         Ok(())
     }
+}
+
+enum Item {
+    Notification {
+        timestamp: DateTime<Utc>,
+        notification: NotificationMessage,
+    },
+    SendMessage {
+        message: String,
+    },
+    WebSocketError(Error),
+    StdinError(io::Error),
 }
