@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -7,7 +8,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message as
 
 use crate::secret::Secret;
 
-use super::subscription::SubscriptionStatus;
+use super::{subscription::SubscriptionStatus, types::Subscription};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -23,7 +24,7 @@ impl WebSocket {
                 .await
                 .context("connect to ws server")?;
 
-        let message = Self::next_message(&mut stream)
+        let (_, message) = Self::next_message(&mut stream)
             .await?
             .context("missing welcome message")?;
         let Message::SessionWelcome(message) = message else {
@@ -40,8 +41,8 @@ impl WebSocket {
         &self.session_info.id
     }
 
-    pub async fn next(&mut self) -> Result<Option<NotificationMessage>> {
-        while let Some(message) = Self::next_message(&mut self.stream).await? {
+    pub async fn next(&mut self) -> Result<Option<(DateTime<Utc>, NotificationMessage)>> {
+        while let Some((timestamp, message)) = Self::next_message(&mut self.stream).await? {
             match message {
                 Message::SessionWelcome(message) => {
                     anyhow::bail!("unexpected welcome message: {message:?}")
@@ -50,8 +51,8 @@ impl WebSocket {
                     // eprintln!("session keepalive message");
                 }
                 Message::Notification(message) => {
-                    eprintln!("{message:#?}");
-                    return Ok(Some(message));
+                    // eprintln!("{message:#?}");
+                    return Ok(Some((timestamp, message)));
                 }
             }
         }
@@ -61,7 +62,7 @@ impl WebSocket {
         Ok(None)
     }
 
-    async fn next_message(stream: &mut WsStream) -> Result<Option<Message>> {
+    async fn next_message(stream: &mut WsStream) -> Result<Option<(DateTime<Utc>, Message)>> {
         while let Some(message) = stream
             .next()
             .await
@@ -73,15 +74,17 @@ impl WebSocket {
                     let message: WebSocketMessage =
                         serde_json::from_str(data.as_str()).context("parse websocket message")?;
                     // eprintln!("received message: {:#?}", message.metadata);
-                    let message = Message::from_message(message)?;
+                    let (timestamp, message) = Message::from_message(message)?;
                     // eprintln!("{message:#?}");
-                    return Ok(Some(message));
+                    return Ok(Some((timestamp, message)));
                 }
                 WsMessage::Binary(data) => {
                     anyhow::bail!("received binary websocket message: {} bytes", data.len());
                 }
                 WsMessage::Ping(data) => {
-                    eprintln!("received ping message: {data:?}");
+                    if !data.is_empty() {
+                        eprintln!("received ping message: {data:?}");
+                    }
                     stream
                         .send(WsMessage::Pong(data))
                         .await
@@ -137,7 +140,7 @@ pub struct WebSocketMetadata {
     pub message_type: String,
 
     /// The UTC date and time that the message was sent.
-    pub message_timestamp: String,
+    pub message_timestamp: DateTime<Utc>,
 
     /// The type of event sent in the message.
     #[serde(default)]
@@ -156,13 +159,16 @@ pub enum Message {
 }
 
 impl Message {
-    fn from_message(message: WebSocketMessage) -> Result<Self> {
-        Ok(match message.metadata.message_type.as_str() {
-            "session_welcome" => Self::SessionWelcome(message.payload()?),
-            "session_keepalive" => Self::SessionKeepalive(message.payload()?),
-            "notification" => Self::Notification(message.payload()?),
-            message_type => anyhow::bail!("unknown message type: {message_type:?}"),
-        })
+    fn from_message(message: WebSocketMessage) -> Result<(DateTime<Utc>, Self)> {
+        Ok((
+            message.metadata.message_timestamp.clone(),
+            match message.metadata.message_type.as_str() {
+                "session_welcome" => Self::SessionWelcome(message.payload()?),
+                "session_keepalive" => Self::SessionKeepalive(message.payload()?),
+                "notification" => Self::Notification(message.payload()?),
+                message_type => anyhow::bail!("unknown message type: {message_type:?}"),
+            },
+        ))
     }
 }
 
@@ -189,7 +195,7 @@ pub struct SessionInfo {
     reconnect_url: Option<Secret>,
 
     /// The UTC date and time that the connection was created.
-    connected_at: String,
+    connected_at: DateTime<Utc>,
 
     /// Undocumented by Twitch API reference, but returned
     recovery_url: Option<String>,
@@ -207,6 +213,32 @@ pub struct NotificationMessage {
 
     /// The event’s data. For information about the event’s data, see the subscription type’s description in Subscription Types.
     event: Value,
+}
+
+impl NotificationMessage {
+    pub fn event<T>(&self) -> Result<Option<T>>
+    where
+        T: Subscription,
+    {
+        if self.subscription.type_ != T::TYPE {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            self.subscription.version == T::VERSION,
+            "subscription version does not match: expected {:?}, got {:?}",
+            T::VERSION,
+            self.subscription.version,
+        );
+
+        serde_json::from_value(self.event.clone())
+            .map(Some)
+            .with_context(|| {
+                format!(
+                    "parse notification event: {:?} {:?}",
+                    self.subscription.type_, self.subscription.version,
+                )
+            })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,7 +267,7 @@ pub struct SubscriptionInfo {
     transport: TransportInfo,
 
     /// The UTC date and time that the subscription was created.
-    created_at: String,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -61,7 +62,7 @@ pub struct ChannelFollowersResponse {
 #[derive(Debug, Deserialize)]
 pub struct ChannelFollower {
     /// The UTC timestamp when the user started following the broadcaster.
-    pub followed_at: String,
+    pub followed_at: DateTime<Utc>,
 
     /// An ID that uniquely identifies the user that’s following the broadcaster.
     pub user_id: String,

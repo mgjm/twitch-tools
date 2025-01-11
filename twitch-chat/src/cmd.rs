@@ -1,8 +1,21 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Args)]
 /// Start the main chat
-pub struct Run {}
+pub struct Run {
+    #[clap(long)]
+    /// Pulse audio output device
+    pub device: Option<String>,
+
+    #[clap(long)]
+    /// Output volume
+    pub volume: Option<f32>,
+
+    /// Path to an audio file
+    pub path: PathBuf,
+}
 
 #[derive(Debug, Subcommand)]
 /// Manage event subscriptions

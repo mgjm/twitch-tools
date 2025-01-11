@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -111,7 +112,7 @@ pub struct User {
     pub email: Option<Secret>,
 
     /// The UTC date and time that the user’s account was created. The timestamp is in RFC3339 format.
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]

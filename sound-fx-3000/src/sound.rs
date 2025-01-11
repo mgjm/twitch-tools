@@ -107,6 +107,13 @@ impl Sound {
         })
     }
 
+    pub fn set_volume(&mut self, volume: f32) {
+        for frame in Arc::make_mut(&mut self.frames) {
+            frame[0] *= volume;
+            frame[1] *= volume;
+        }
+    }
+
     /// Return the first signal spec of the decoded sound packets
     pub fn spec(&self) -> SignalSpec {
         self.spec

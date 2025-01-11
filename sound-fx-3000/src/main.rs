@@ -12,6 +12,10 @@ struct Args {
     /// Pulse audio output device
     device: Option<String>,
 
+    #[clap(long)]
+    /// Output volume
+    volume: Option<f32>,
+
     /// Path to an audio file
     path: PathBuf,
 }
@@ -20,7 +24,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
     eprintln!("{args:#?}");
 
-    let sound = Sound::open(&args.path)?;
+    let mut sound = Sound::open(&args.path)?;
+
+    if let Some(volume) = args.volume {
+        sound.set_volume(volume);
+    }
 
     eprintln!("start");
 

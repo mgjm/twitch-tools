@@ -1,10 +1,16 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use anyhow::{Context, Result};
+use chrono::Timelike;
 use clap::Parser;
+use crossterm::style::{Color, Stylize};
+use sound_fx_3000::{Output, Sound};
 use tokio::task::LocalSet;
 use twitch_api::{
     auth::{self, Scope},
     client::Client,
     events::{
+        chat::{ChatMessage, ChatMessageCondition},
         subscription::{
             CreateSubscriptionRequest, DeleteSubscriptionRequest, GetSubscriptionsRequest,
             TransportRequest,
@@ -56,6 +62,15 @@ async fn run() -> Result<()> {
 
 impl cmd::Run {
     async fn run(&self) -> Result<()> {
+        let args = self;
+        let mut sound = Sound::open(&args.path)?;
+
+        if let Some(volume) = args.volume {
+            sound.set_volume(volume);
+        }
+
+        let output = Output::spawn(sound.spec().rate, args.device.as_deref())?;
+
         let mut client = Client::new().authenticated_from_env()?;
 
         let user = client
@@ -77,25 +92,88 @@ impl cmd::Run {
         eprintln!("websocket: {:?}", ws.session_id());
 
         let res = client
-            .send(&CreateSubscriptionRequest {
-                type_: "channel.chat.message",
-                version: "1",
-                condition: twitch_api::json!({
-                    "broadcaster_user_id": user.id.clone(),
-                    "user_id": user.id.clone(),
-                }),
-                transport: TransportRequest::WebSocket {
+            .send(&CreateSubscriptionRequest::new::<ChatMessage>(
+                &ChatMessageCondition {
+                    broadcaster_user_id: user.id.clone(),
+                    user_id: user.id.clone(),
+                },
+                TransportRequest::WebSocket {
                     session_id: ws.session_id().clone(),
                 },
-            })
+            )?)
             .await
             .context("create subscription")?;
         eprintln!("{res:#?}");
 
-        while ws.next().await?.is_some() {}
+        while let Some((timestamp, notification)) = ws.next().await? {
+            output.play(&sound)?;
+            if let Some(message) = notification.event::<ChatMessage>()? {
+                // eprintln!("{message:#?}");
+                let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                let color = parse_color(&message.color, &message.chatter_user_id);
+                println!(
+                    "{} {} {}",
+                    timestamp.format("%T").to_string().dark_grey(),
+                    message.chatter_user_name.with(color).bold(),
+                    message.message.text,
+                );
+            } else {
+                eprintln!("unknown notification event: {notification:#?}");
+            }
+        }
 
         Ok(())
     }
+}
+
+fn parse_color(color: &str, user_id: &str) -> Color {
+    try_parse_color(color).unwrap_or_else(|| random_color(user_id))
+}
+
+fn try_parse_color(color: &str) -> Option<Color> {
+    fn parse_hex(b: u8) -> Option<u8> {
+        Some(match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            _ => return None,
+        })
+    }
+    let color = color.strip_prefix('#')?.as_bytes();
+    if color.len() != 6 {
+        return None;
+    }
+
+    let mut iter = color
+        .chunks(2)
+        .map(|c| Some((parse_hex(c[0])? << 4) | parse_hex(c[1])?));
+    let r = iter.next()??;
+    let g = iter.next()??;
+    let b = iter.next()??;
+    Some(Color::Rgb { r, g, b })
+}
+
+fn random_color(user_id: &str) -> Color {
+    let mut hasher = DefaultHasher::new();
+    user_id.hash(&mut hasher);
+    let hash = hasher.finish();
+    const COLORS: [Color; 14] = [
+        Color::DarkGrey,
+        Color::Red,
+        Color::DarkRed,
+        Color::Green,
+        Color::DarkGreen,
+        Color::Yellow,
+        Color::DarkYellow,
+        Color::Blue,
+        Color::DarkBlue,
+        Color::Magenta,
+        Color::DarkMagenta,
+        Color::Cyan,
+        Color::DarkCyan,
+        Color::Grey,
+    ];
+    COLORS[(hash % COLORS.len() as u64) as usize]
 }
 
 impl cmd::Eventsub {

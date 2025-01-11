@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -7,20 +9,36 @@ use crate::{
     secret::Secret,
 };
 
+use super::types::Subscription;
+
 #[derive(Debug, Serialize)]
 pub struct CreateSubscriptionRequest {
     /// The type of subscription to create. For a list of subscriptions that you can create, see Subscription Types. Set this field to the value in the Name column of the Subscription Types table.
     #[serde(rename = "type")]
-    pub type_: &'static str,
+    type_: &'static str,
 
     /// The version number that identifies the definition of the subscription type that you want the response to use.
-    pub version: &'static str,
+    version: &'static str,
 
     /// A JSON object that contains the parameter values that are specific to the specified subscription type. For the object’s required and optional fields, see the subscription type’s documentation.
-    pub condition: Value,
+    condition: Value,
 
     /// The transport details that you want Twitch to use when sending you notifications.
-    pub transport: TransportRequest,
+    transport: TransportRequest,
+}
+
+impl CreateSubscriptionRequest {
+    pub fn new<T>(condition: &T::Condition, transport: TransportRequest) -> Result<Self>
+    where
+        T: Subscription,
+    {
+        Ok(Self {
+            type_: T::TYPE,
+            version: T::VERSION,
+            condition: serde_json::to_value(condition).context("convert subscription condition")?,
+            transport,
+        })
+    }
 }
 
 impl Request for CreateSubscriptionRequest {
@@ -154,7 +172,7 @@ pub struct SubscriptionInfo {
     pub condition: Value,
 
     /// The date and time (in RFC3339 format) of when the subscription was created.
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 
     /// The transport details used to send the notifications.
     pub transport: TransportResponse,
@@ -178,7 +196,7 @@ pub enum TransportResponse {
         session_id: Secret,
 
         /// The UTC date and time that the WebSocket connection was established. Included only if method is set to websocket.
-        connected_at: String,
+        connected_at: DateTime<Utc>,
     },
 
     #[serde(rename = "conduit")]
