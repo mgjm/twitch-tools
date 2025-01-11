@@ -11,6 +11,7 @@ use symphonia::core::{
 };
 
 /// A decoded sound sample.
+#[derive(Clone)]
 pub struct Sound {
     frames: Arc<[[f32; 2]]>,
     spec: SignalSpec,

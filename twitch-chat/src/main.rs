@@ -1,10 +1,8 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::{Context, Result};
-use chrono::Timelike;
 use clap::Parser;
 use crossterm::style::{Color, Stylize};
-use sound_fx_3000::{Output, Sound};
 use tokio::task::LocalSet;
 use twitch_api::{
     auth::{self, Scope},
@@ -22,7 +20,11 @@ use twitch_api::{
     user::UsersRequest,
 };
 
+use crate::config::Event;
+
 mod cmd;
+mod config;
+mod sound_system;
 
 #[derive(Debug, Parser)]
 #[clap(version)]
@@ -62,14 +64,11 @@ async fn run() -> Result<()> {
 
 impl cmd::Run {
     async fn run(&self) -> Result<()> {
-        let args = self;
-        let mut sound = Sound::open(&args.path)?;
+        let config = crate::config::Config::open(&self.config)?;
 
-        if let Some(volume) = args.volume {
-            sound.set_volume(volume);
-        }
+        let mut sound_system = sound_system::SoundSystem::init(config.outputs, config.sounds)?;
 
-        let output = Output::spawn(sound.spec().rate, args.device.as_deref())?;
+        eprintln!("sound system initialized");
 
         let mut client = Client::new().authenticated_from_env()?;
 
@@ -106,8 +105,9 @@ impl cmd::Run {
         eprintln!("{res:#?}");
 
         while let Some((timestamp, notification)) = ws.next().await? {
-            output.play(&sound)?;
             if let Some(message) = notification.event::<ChatMessage>()? {
+                sound_system.play_sound_for_event(Event::Message);
+
                 // eprintln!("{message:#?}");
                 let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
                 let color = parse_color(&message.color, &message.chatter_user_id);
