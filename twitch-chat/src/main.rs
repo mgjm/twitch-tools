@@ -6,9 +6,11 @@ use crossterm::style::{Color, Stylize};
 use tokio::task::LocalSet;
 use twitch_api::{
     auth::{self, Scope},
+    chat::ChatColorsRequest,
     client::Client,
     events::{
         chat::{ChatMessage, ChatMessageCondition},
+        follow::{Follow, FollowCondition},
         subscription::{
             CreateSubscriptionRequest, DeleteSubscriptionRequest, GetSubscriptionsRequest,
             TransportRequest,
@@ -104,6 +106,20 @@ impl cmd::Run {
             .context("create subscription")?;
         eprintln!("{res:#?}");
 
+        let res = client
+            .send(&CreateSubscriptionRequest::new::<Follow>(
+                &FollowCondition {
+                    broadcaster_user_id: user.id.clone(),
+                    moderator_user_id: user.id.clone(),
+                },
+                TransportRequest::WebSocket {
+                    session_id: ws.session_id().clone(),
+                },
+            )?)
+            .await
+            .context("create subscription")?;
+        eprintln!("{res:#?}");
+
         while let Some((timestamp, notification)) = ws.next().await? {
             if let Some(message) = notification.event::<ChatMessage>()? {
                 sound_system.play_sound_for_event(Event::Message);
@@ -116,6 +132,24 @@ impl cmd::Run {
                     timestamp.format("%T").to_string().dark_grey(),
                     message.chatter_user_name.with(color).bold(),
                     message.message.text,
+                );
+            } else if let Some(follow) = notification.event::<Follow>()? {
+                sound_system.play_sound_for_event(Event::Follow);
+
+                // eprintln!("{follow:#?}");
+                let timestamp = follow.followed_at.with_timezone(&chrono_tz::Europe::Berlin);
+                let follower = client
+                    .send(&ChatColorsRequest::id(follow.user_id.clone()))
+                    .await
+                    .context("load chat color for follow message")?
+                    .into_chat_color()
+                    .context("unable to load char color for follow message")?;
+                let color = parse_color(&follower.color, &follow.user_id);
+                println!(
+                    "{} {} {}",
+                    timestamp.format("%T").to_string().dark_grey(),
+                    follow.user_name.with(color).bold(),
+                    "has followed you".italic(),
                 );
             } else {
                 eprintln!("unknown notification event: {notification:#?}");
