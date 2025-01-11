@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::client::{JsonEncoding, Request, UrlParamEncoding};
+use crate::client::{JsonEncoding, NoContent, Request, UrlParamEncoding};
 
 #[derive(Debug, Serialize)]
 pub struct ChatColorsRequest {
@@ -114,4 +114,58 @@ pub struct SentChatMessageDropReason {
 
     /// Message for why the message was dropped.
     pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SendChatAnnouncementRequest {
+    /// The ID of the broadcaster that owns the chat room to send the announcement to.
+    #[serde(skip)]
+    pub broadcaster_id: String,
+
+    /// The ID of a user who has permission to moderate the broadcaster’s chat room, or the broadcaster’s ID if they’re sending the announcement. This ID must match the user ID in the user access token.
+    #[serde(skip)]
+    pub moderator_id: String,
+
+    /// The announcement to make in the broadcaster’s chat room. Announcements are limited to a maximum of 500 characters; announcements longer than 500 characters are truncated.
+    pub message: String,
+
+    /// The color used to highlight the announcement. Possible case-sensitive values are:
+    ///
+    /// If color is set to primary or is not set, the channel’s accent color is used to highlight the announcement (see Profile Accent Color under profile settings, Channel and Videos, and Brand).
+    pub color: ChatAnnouncementColor,
+}
+
+impl Request for SendChatAnnouncementRequest {
+    type Encoding = JsonEncoding;
+    type Response = NoContent;
+
+    fn url(&self) -> impl reqwest::IntoUrl {
+        twitch_helix!("/chat/announcements")
+    }
+
+    fn modify_request(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        req.query(&[
+            ("broadcaster_id", &self.broadcaster_id),
+            ("moderator_id", &self.moderator_id),
+        ])
+    }
+}
+
+#[derive(Debug, Default, Serialize)]
+pub enum ChatAnnouncementColor {
+    #[serde(rename = "blue")]
+    Blue,
+
+    #[serde(rename = "green")]
+    Green,
+
+    #[serde(rename = "orange")]
+    Orange,
+
+    #[serde(rename = "purple")]
+    Purple,
+
+    #[default]
+    #[serde(rename = "primary")]
+    Primary,
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    client::{DeleteUrlParamEncoding, JsonEncoding, Request, UrlParamEncoding},
+    client::{DeleteUrlParamEncoding, JsonEncoding, NoContent, Request, UrlParamEncoding},
     pagination::Pagination,
     secret::Secret,
 };
@@ -113,7 +113,7 @@ pub struct DeleteSubscriptionRequest {
 
 impl Request for DeleteSubscriptionRequest {
     type Encoding = DeleteUrlParamEncoding;
-    type Response = ();
+    type Response = NoContent;
 
     fn url(&self) -> impl reqwest::IntoUrl {
         twitch_helix!("/eventsub/subscriptions")

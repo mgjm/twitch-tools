@@ -13,7 +13,10 @@ use tokio::{sync::mpsc, task::LocalSet};
 use twitch_api::{
     auth::{self, Scope},
     channel::{Channel, ChannelsRequest},
-    chat::{ChatColorsRequest, SendChatMessageRequest},
+    chat::{
+        ChatAnnouncementColor, ChatColorsRequest, SendChatAnnouncementRequest,
+        SendChatMessageRequest,
+    },
     client::Client,
     events::{
         chat::{ChatMessage, ChatMessageCondition},
@@ -341,6 +344,18 @@ impl cmd::Run {
                                     continue;
                                 };
                                 poll.result()
+                            }
+                            ("announce", _) if !text.is_empty() => {
+                                client
+                                    .send(&SendChatAnnouncementRequest {
+                                        broadcaster_id: user.id.clone(),
+                                        moderator_id: user.id.clone(),
+                                        message: text.into(),
+                                        color: ChatAnnouncementColor::Primary,
+                                    })
+                                    .await
+                                    .context("send chat announcement")?;
+                                continue;
                             }
                             _ => {
                                 eprintln!("unknown command: #{cmd} {text:?}");

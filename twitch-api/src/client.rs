@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use reqwest::{IntoUrl, Method, RequestBuilder, Response, StatusCode, header};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -104,7 +102,7 @@ impl Client {
         let status = res.status();
 
         if status.is_success() {
-            T::Encoding::decode(res).await
+            T::Response::decode(res).await
         } else if status.is_client_error() || status.is_server_error() {
             let res = res
                 .json::<ErrorResponse>()
@@ -133,7 +131,7 @@ impl RequestBuilderExt for RequestBuilder {
     where
         T: Request,
     {
-        T::Encoding::encode(self, req)
+        T::Encoding::encode(req.modify_request(self), req)
     }
 
     fn access_token_and_client_id(
@@ -151,25 +149,35 @@ impl RequestBuilderExt for RequestBuilder {
 
 pub trait Request: Serialize {
     type Encoding: Encoding;
-    type Response: DeserializeOwned + 'static;
+    type Response: DecodeResponse;
 
     fn url(&self) -> impl IntoUrl;
+
+    fn modify_request(&self, req: RequestBuilder) -> RequestBuilder {
+        req
+    }
 }
 
 pub trait Encoding {
     const METHOD: Method;
 
     fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder;
+}
 
+pub trait DecodeResponse: Sized {
     #[expect(async_fn_in_trait)]
-    async fn decode<T>(res: Response) -> Result<T>
-    where
-        T: DeserializeOwned + 'static,
-    {
+    async fn decode(res: Response) -> Result<Self>;
+}
+
+impl<T> DecodeResponse for T
+where
+    T: DeserializeOwned,
+{
+    async fn decode(res: Response) -> Result<Self> {
         if !matches!(res.status(), StatusCode::OK | StatusCode::ACCEPTED) {
             return Err(ApiError::UnexpectedApiStatus(res.status()));
         }
-        res.json::<T>().await.map_err(ApiError::ParseReponse)
+        res.json::<Self>().await.map_err(ApiError::ParseReponse)
     }
 }
 
@@ -191,19 +199,6 @@ impl Encoding for DeleteUrlParamEncoding {
     fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder {
         builder.query(req)
     }
-
-    async fn decode<T>(res: Response) -> Result<T>
-    where
-        T: DeserializeOwned + 'static,
-    {
-        if res.status() != StatusCode::NO_CONTENT {
-            return Err(ApiError::UnexpectedApiStatus(res.status()));
-        }
-        let value: Box<dyn Any> = Box::new(());
-        Ok(*value
-            .downcast()
-            .expect("delete url param encoding only works with ()"))
-    }
 }
 
 pub enum FormEncoding {}
@@ -223,5 +218,16 @@ impl Encoding for JsonEncoding {
 
     fn encode(builder: RequestBuilder, req: &impl Serialize) -> RequestBuilder {
         builder.json(req)
+    }
+}
+
+pub struct NoContent(());
+
+impl DecodeResponse for NoContent {
+    async fn decode(res: Response) -> Result<Self> {
+        if res.status() != StatusCode::NO_CONTENT {
+            return Err(ApiError::UnexpectedApiStatus(res.status()));
+        }
+        Ok(Self(()))
     }
 }
