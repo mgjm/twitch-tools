@@ -10,6 +10,7 @@ pub mod events;
 pub mod follower;
 pub mod pagination;
 pub mod secret;
+pub mod stream;
 pub mod user;
 
 pub use serde_json::json;

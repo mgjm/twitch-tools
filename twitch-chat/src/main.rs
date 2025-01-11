@@ -11,6 +11,7 @@ use twitch_api::{
     events::{
         chat::{ChatMessage, ChatMessageCondition},
         follow::{Follow, FollowCondition},
+        stream::{StreamOffline, StreamOfflineCondition, StreamOnline, StreamOnlineCondition},
         subscription::{
             CreateSubscriptionRequest, DeleteSubscriptionRequest, GetSubscriptionsRequest,
             TransportRequest,
@@ -19,6 +20,7 @@ use twitch_api::{
     },
     follower::ChannelFollowersRequest,
     secret::Secret,
+    stream::{Stream, StreamsRequest},
     user::UsersRequest,
 };
 
@@ -120,11 +122,53 @@ impl cmd::Run {
             .context("create subscription")?;
         eprintln!("{res:#?}");
 
+        let res = client
+            .send(&CreateSubscriptionRequest::new::<StreamOnline>(
+                &StreamOnlineCondition {
+                    broadcaster_user_id: user.id.clone(),
+                },
+                TransportRequest::WebSocket {
+                    session_id: ws.session_id().clone(),
+                },
+            )?)
+            .await
+            .context("create subscription")?;
+        eprintln!("{res:#?}");
+
+        let res = client
+            .send(&CreateSubscriptionRequest::new::<StreamOffline>(
+                &StreamOfflineCondition {
+                    broadcaster_user_id: user.id.clone(),
+                },
+                TransportRequest::WebSocket {
+                    session_id: ws.session_id().clone(),
+                },
+            )?)
+            .await
+            .context("create subscription")?;
+        eprintln!("{res:#?}");
+
+        {
+            let stream = client
+                .send(&StreamsRequest::user_id(user.id.clone()))
+                .await
+                .context("load stream info")?
+                .into_stream()
+                .context("missing stream")?;
+            let timestamp = stream.started_at.with_timezone(&chrono_tz::Europe::Berlin);
+            println!(
+                "{} {} {}",
+                timestamp.format("%T").to_string().dark_grey(),
+                "stream already online".italic().green(),
+                stream_info(&stream),
+            );
+        }
+
         while let Some((timestamp, notification)) = ws.next().await? {
             if let Some(message) = notification.event::<ChatMessage>()? {
                 sound_system.play_sound_for_event(Event::Message);
-
                 // eprintln!("{message:#?}");
+
                 let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
                 let color = parse_color(&message.color, &message.chatter_user_id);
                 println!(
@@ -135,8 +179,8 @@ impl cmd::Run {
                 );
             } else if let Some(follow) = notification.event::<Follow>()? {
                 sound_system.play_sound_for_event(Event::Follow);
-
                 // eprintln!("{follow:#?}");
+
                 let timestamp = follow.followed_at.with_timezone(&chrono_tz::Europe::Berlin);
                 let follower = client
                     .send(&ChatColorsRequest::id(follow.user_id.clone()))
@@ -151,6 +195,41 @@ impl cmd::Run {
                     follow.user_name.with(color).bold(),
                     "has followed you".italic(),
                 );
+            } else if let Some(online) = notification.event::<StreamOnline>()? {
+                sound_system.play_sound_for_event(Event::Online);
+                // eprintln!("{online:#?}");
+
+                let timestamp = online.started_at.with_timezone(&chrono_tz::Europe::Berlin);
+                let stream = client
+                    .send(&StreamsRequest::user_id(user.id.clone()))
+                    .await
+                    .context("load stream info")?
+                    .into_stream()
+                    .context("missing stream")?;
+                println!(
+                    "{} {} {}",
+                    timestamp.format("%T").to_string().dark_grey(),
+                    "stream went online".italic().green(),
+                    stream_info(&stream),
+                );
+            } else if let Some(offline) = notification.event::<StreamOffline>()? {
+                sound_system.play_sound_for_event(Event::Offline);
+                // eprintln!("{offline:#?}");
+                let _ = offline;
+
+                let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                let stream = client
+                    .send(&StreamsRequest::user_id(user.id.clone()))
+                    .await
+                    .context("load stream info")?
+                    .into_stream()
+                    .context("missing stream")?;
+                println!(
+                    "{} {} {}",
+                    timestamp.format("%T").to_string().dark_grey(),
+                    "stream went offline".italic().red(),
+                    stream_info(&stream),
+                );
             } else {
                 eprintln!("unknown notification event: {notification:#?}");
             }
@@ -158,6 +237,22 @@ impl cmd::Run {
 
         Ok(())
     }
+}
+
+fn stream_info(stream: &Stream) -> String {
+    use std::fmt::Write as _;
+
+    let mut info = String::new();
+
+    let mut append_info = |key: &str, value: &str| {
+        write!(info, "\n         {} {}", key.dark_grey(), value).unwrap();
+    };
+
+    append_info("Title   ", &stream.title);
+    append_info("Tags    ", &stream.tags.join(", "));
+    append_info("Category", &stream.game_name);
+    append_info("Language", &stream.language);
+    info
 }
 
 fn parse_color(color: &str, user_id: &str) -> Color {

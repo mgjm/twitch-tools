@@ -120,19 +120,19 @@ impl Request for DeviceRequest {
 #[derive(Debug, Deserialize)]
 pub struct DeviceResponse {
     /// The identifier for a given user.
-    device_code: Secret,
+    pub device_code: Secret,
 
     /// Time until the code is no longer valid
-    expires_in: u32,
+    pub expires_in: u32,
 
     /// Time until another valid code can be requested
-    interval: u32,
+    pub interval: u32,
 
     /// The code that the user will use to authenticate
-    user_code: Secret,
+    pub user_code: Secret,
 
     /// The address you will send users to, to authenticate
-    verification_uri: Secret,
+    pub verification_uri: Secret,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,19 +166,19 @@ impl Request for TokenRequest {
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
     /// The authenticated token, to be used for various API endpoints and EventSub subscriptions.
-    access_token: Secret,
+    pub access_token: Secret,
 
     /// Time until the code is no longer valid.
-    expires_in: u32,
+    pub expires_in: u32,
 
     /// A token used to refresh the access token.
-    refresh_token: Secret,
+    pub refresh_token: Secret,
 
     /// An array of the scopes requested.
-    scope: Vec<Scope>,
+    pub scope: Vec<Scope>,
 
     /// Will generally be "beare"
-    token_type: String,
+    pub token_type: String,
 }
 
 #[derive(Debug, Clone)]

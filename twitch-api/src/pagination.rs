@@ -6,5 +6,5 @@ use crate::secret::Secret;
 pub struct Pagination {
     /// The cursor used to get the next page of results. Use the cursor to set the request’s after query parameter.
     #[serde(default)]
-    cursor: Option<Secret>,
+    pub cursor: Option<Secret>,
 }

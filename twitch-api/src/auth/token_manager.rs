@@ -69,6 +69,7 @@ pub struct TokenRequest {
     /// Your app’s client ID. See Registering your app.
     client_id: Secret,
 
+    #[expect(clippy::empty_line_after_doc_comments)]
     /// Your app’s client secret. See Registering your app.
     // client_secret: String,
 

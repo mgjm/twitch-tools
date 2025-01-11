@@ -161,7 +161,7 @@ pub enum Message {
 impl Message {
     fn from_message(message: WebSocketMessage) -> Result<(DateTime<Utc>, Self)> {
         Ok((
-            message.metadata.message_timestamp.clone(),
+            message.metadata.message_timestamp,
             match message.metadata.message_type.as_str() {
                 "session_welcome" => Self::SessionWelcome(message.payload()?),
                 "session_keepalive" => Self::SessionKeepalive(message.payload()?),
@@ -183,22 +183,22 @@ pub struct SessionWelcomeMessage {
 #[serde(deny_unknown_fields)]
 pub struct SessionInfo {
     /// An ID that uniquely identifies this WebSocket connection. Use this ID to set the session_id field in all subscription requests.
-    id: Secret,
+    pub id: Secret,
 
     /// The connection’s status.
-    status: String,
+    pub status: String,
 
     /// The maximum number of seconds that you should expect silence before receiving a keepalive message. For a welcome message, this is the number of seconds that you have to subscribe to an event after receiving the welcome message. If you don’t subscribe to an event within this window, the socket is disconnected.
-    keepalive_timeout_seconds: u32,
+    pub keepalive_timeout_seconds: u32,
 
     /// The URL to reconnect to if you get a Reconnect message.
-    reconnect_url: Option<Secret>,
+    pub reconnect_url: Option<Secret>,
 
     /// The UTC date and time that the connection was created.
-    connected_at: DateTime<Utc>,
+    pub connected_at: DateTime<Utc>,
 
     /// Undocumented by Twitch API reference, but returned
-    recovery_url: Option<String>,
+    pub recovery_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -245,37 +245,37 @@ impl NotificationMessage {
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionInfo {
     /// An ID that uniquely identifies this subscription.
-    id: Secret,
+    pub id: Secret,
 
     /// The subscription’s status, which is set to enabled.
-    status: SubscriptionStatus,
+    pub status: SubscriptionStatus,
 
     /// The type of event sent in the message. See the event field.
     #[serde(rename = "type")]
-    type_: String,
+    pub type_: String,
 
     /// The version number of the subscription type’s definition.
-    version: String,
+    pub version: String,
 
     /// The event’s cost. See Subscription limits.
-    cost: u32,
+    pub cost: u32,
 
     /// The conditions under which the event fires. For example, if you requested notifications when a broadcaster gets a new follower, this object contains the broadcaster’s ID. For information about the condition’s data, see the subscription type’s description in Subscription types.
-    condition: Value,
+    pub condition: Value,
 
     /// An object that contains information about the transport used for notifications.
-    transport: TransportInfo,
+    pub transport: TransportInfo,
 
     /// The UTC date and time that the subscription was created.
-    created_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransportInfo {
     /// The transport method, which is set to websocket.
-    method: String,
+    pub method: String,
 
     /// An ID that uniquely identifies the WebSocket connection.
-    session_id: Secret,
+    pub session_id: Secret,
 }

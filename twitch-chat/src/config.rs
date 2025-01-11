@@ -55,6 +55,8 @@ pub enum Event {
     Join,
     Leave,
     Follow,
+    Online,
+    Offline,
 }
 
 fn vec_or_value<'de, T, D>(deserializer: D) -> Result<Vec<T>, D::Error>

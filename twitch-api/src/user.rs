@@ -103,6 +103,7 @@ pub struct User {
     /// The number of times the user’s channel has been viewed.
     ///
     /// NOTE: This field has been deprecated (see Get Users API endpoint – “view_count” deprecation). Any data in this field is not valid and should not be used.
+    #[expect(dead_code)]
     view_count: u64,
 
     /// The user’s verified email address. The object includes this field only if the user access token includes the user:read:email scope.

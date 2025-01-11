@@ -202,7 +202,6 @@ impl Encoding for DeleteUrlParamEncoding {
         let value: Box<dyn Any> = Box::new(());
         Ok(*value
             .downcast()
-            .ok()
             .expect("delete url param encoding only works with ()"))
     }
 }
