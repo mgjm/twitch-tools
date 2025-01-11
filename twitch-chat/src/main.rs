@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
+    fmt::Write as _,
     hash::{DefaultHasher, Hash, Hasher},
-    io,
+    io, iter,
 };
 
 use anyhow::{Context, Error, Result};
@@ -224,6 +226,8 @@ impl cmd::Run {
             }
         });
 
+        let mut poll: Option<Poll> = None;
+
         while let Some(item) = receiver.recv().await {
             match item {
                 Item::Notification {
@@ -233,6 +237,10 @@ impl cmd::Run {
                     if let Some(message) = notification.event::<ChatMessage>()? {
                         sound_system.play_sound_for_event(Event::Message);
                         // eprintln!("{message:#?}");
+
+                        if let Some(poll) = &mut poll {
+                            poll.vote(&message.chatter_user_id, &message.message.text);
+                        }
 
                         let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
                         let color = parse_color(&message.color, &message.chatter_user_id);
@@ -302,6 +310,46 @@ impl cmd::Run {
                     }
                 }
                 Item::SendMessage { message } => {
+                    let message = if let Some(message) = message.strip_prefix('#') {
+                        let (cmd, text) = message.split_once(' ').unwrap_or((message, ""));
+                        match (cmd, text) {
+                            ("poll", _) => {
+                                if poll.is_some() {
+                                    eprintln!("poll already active, try #end poll");
+                                    continue;
+                                }
+
+                                let mut message = "Frage:".to_string();
+                                let mut options = Vec::new();
+                                for (i, option) in text.split(',').enumerate() {
+                                    if i != 0 {
+                                        message.push_str(" -");
+                                    }
+                                    let option = option.trim();
+                                    options.push(option.into());
+                                    write!(message, " {i}={option}").unwrap();
+                                }
+                                poll = Some(Poll {
+                                    options,
+                                    votes: Default::default(),
+                                });
+                                message
+                            }
+                            ("end", "poll") => {
+                                let Some(poll) = poll.take() else {
+                                    eprintln!("no active poll");
+                                    continue;
+                                };
+                                poll.result()
+                            }
+                            _ => {
+                                eprintln!("unknown command: #{cmd} {text:?}");
+                                continue;
+                            }
+                        }
+                    } else {
+                        message
+                    };
                     let message = client
                         .send(&SendChatMessageRequest {
                             broadcaster_id: user.id.clone(),
@@ -464,4 +512,42 @@ enum Item {
     },
     WebSocketError(Error),
     StdinError(io::Error),
+}
+
+struct Poll {
+    options: Vec<String>,
+    votes: HashMap<String, usize>,
+}
+impl Poll {
+    fn vote(&mut self, user_id: &str, text: &str) {
+        let Ok(n) = text.split(' ').next().unwrap().parse() else {
+            return;
+        };
+        self.votes.insert(user_id.into(), n);
+    }
+
+    fn result(self) -> String {
+        let mut votes = vec![0; self.options.len()];
+        for vote in self.votes.into_values() {
+            votes[vote] += 1;
+        }
+        let max = votes.iter().copied().max().unwrap_or(0);
+        if max == 0 {
+            "Ergebnis: Keine Stimmen".into()
+        } else {
+            let mut message = format!("Ergebnis[{max}]:");
+            let mut first = true;
+            for (option, votes) in iter::zip(self.options, votes) {
+                if votes == max {
+                    if first {
+                        first = false;
+                    } else {
+                        message.push_str(" -");
+                    }
+                    write!(message, " {option}").unwrap();
+                }
+            }
+            message
+        }
+    }
 }
