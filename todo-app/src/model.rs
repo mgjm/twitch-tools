@@ -2,7 +2,7 @@ use std::{cell::RefCell, fs, ops::ControlFlow, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use crokey::KeyCombination;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Layout},
     style::Stylize,
@@ -17,6 +17,7 @@ use crate::{config::Keybindings, todo::Todo, CharToByteIndex};
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
+    #[serde(default)]
     title: String,
 
     #[serde(default, rename = "todo")]
@@ -38,6 +39,9 @@ pub struct Model {
     is_selected: bool,
 
     #[serde(skip)]
+    edit_title: bool,
+
+    #[serde(skip)]
     pub timeout: Option<Duration>,
 
     #[serde(skip)]
@@ -57,9 +61,25 @@ impl Model {
         .context("write data")
     }
 
+    pub fn did_load(&mut self) {
+        if self.title.is_empty() {
+            self.edit_title = true;
+            self.cursor_y = Some(0);
+        }
+
+        if self.todos.is_empty() {
+            self.todos.push(Todo::default());
+            self.reselect();
+        }
+    }
+
     pub fn update(&mut self, event: Option<Event>) -> Result<ControlFlow<()>> {
         let result = if let Some(cursor_y) = self.cursor_y {
-            self.update_insert(event, cursor_y)
+            if self.edit_title {
+                self.update_insert_title(event, cursor_y)
+            } else {
+                self.update_insert(event, cursor_y)
+            }
         } else {
             self.update_normal(event)
         };
@@ -67,6 +87,10 @@ impl Model {
         if self.todos.is_empty() {
             self.todos.push(Todo::default());
             self.reselect();
+        }
+
+        if self.cursor_y.is_none() {
+            self.edit_title = false;
         }
 
         self.timeout = if self.is_selected && self.cursor_y.is_none() {
@@ -140,46 +164,25 @@ impl Model {
                         return command.run(self);
                     }
                 }
-                if event.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
-                    match event.code {
-                        KeyCode::Left => {
-                            self.cursor_y = Some(cursor_y.saturating_sub(1));
-                        }
-                        KeyCode::Right if cursor_y < chars => {
-                            self.cursor_y = Some(cursor_y + 1);
-                        }
-                        KeyCode::Backspace => {
-                            let Some(y) = cursor_y.checked_sub(1) else {
-                                return Ok(ControlFlow::Continue(()));
-                            };
-                            todo.text.remove(todo.text.char_to_byte_index(y));
-                            self.cursor_y = Some(y);
-                        }
-                        KeyCode::Delete => {
-                            let index = todo.text.char_to_byte_index(cursor_y);
-                            if index < todo.text.len() {
-                                todo.text.remove(index);
-                            }
-                        }
-                        KeyCode::Enter => {
-                            let level = todo.level;
-                            self.change_selection(|model| {
-                                model.todos.insert(
-                                    model.index + 1,
-                                    Todo {
-                                        level,
-                                        ..Default::default()
-                                    },
-                                );
-                                model.index += 1;
-                                model.cursor_y = Some(0);
-                            });
-                        }
-                        KeyCode::Char(c) => {
-                            todo.text.insert(todo.text.char_to_byte_index(cursor_y), c);
-                            self.cursor_y = Some(cursor_y + 1);
-                        }
-                        _ => {}
+
+                match Self::update_text(cursor_y, &mut todo.text, chars, event) {
+                    None => {}
+                    Some(None) => {
+                        let level = todo.level;
+                        self.change_selection(|model| {
+                            model.todos.insert(
+                                model.index + 1,
+                                Todo {
+                                    level,
+                                    ..Default::default()
+                                },
+                            );
+                            model.index += 1;
+                            model.cursor_y = Some(0);
+                        });
+                    }
+                    Some(Some(y)) => {
+                        self.cursor_y = Some(y);
                     }
                 }
             }
@@ -191,6 +194,78 @@ impl Model {
         Ok(ControlFlow::Continue(()))
     }
 
+    fn update_insert_title(
+        &mut self,
+        event: Option<Event>,
+        mut cursor_y: usize,
+    ) -> Result<ControlFlow<()>> {
+        self.timeout = None;
+        let Some(event) = event else {
+            return Ok(ControlFlow::Continue(()));
+        };
+
+        let chars = self.title.chars().count();
+        if cursor_y > chars {
+            cursor_y = chars;
+            self.cursor_y = Some(cursor_y);
+        }
+
+        match event {
+            Event::FocusGained => {}
+            Event::FocusLost => {}
+            Event::Key(event) => {
+                if event.kind == KeyEventKind::Press {
+                    let key: KeyCombination = event.into();
+                    if let Some(command) = self.keybindings.insert.get(&key) {
+                        return command.run(self);
+                    }
+                }
+                if let Some(Some(y)) = Self::update_text(cursor_y, &mut self.title, chars, event) {
+                    self.cursor_y = Some(y);
+                }
+            }
+            Event::Mouse(_) => {}
+            Event::Paste(_) => {}
+            Event::Resize(_, _) => {}
+        }
+
+        Ok(ControlFlow::Continue(()))
+    }
+
+    fn update_text(
+        cursor_y: usize,
+        text: &mut String,
+        chars: usize,
+        event: KeyEvent,
+    ) -> Option<Option<usize>> {
+        if !event.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+            return None;
+        }
+
+        Some(match event.code {
+            KeyCode::Left => Some(cursor_y.saturating_sub(1)),
+            KeyCode::Right if cursor_y < chars => Some(cursor_y + 1),
+            KeyCode::Backspace => {
+                let y = cursor_y.checked_sub(1)?;
+                text.remove(text.char_to_byte_index(y));
+                Some(y)
+            }
+            KeyCode::Delete => {
+                let index = text.char_to_byte_index(cursor_y);
+                if index < text.len() {
+                    text.remove(index);
+                }
+                return None;
+            }
+            KeyCode::Enter => None,
+            KeyCode::Char(c) => {
+                text.insert(text.char_to_byte_index(cursor_y), c);
+                Some(cursor_y + 1)
+            }
+            _ => return None,
+        })
+    }
+
     pub fn draw(&self, frame: &mut Frame) {
         let vertical = Layout::vertical([
             Constraint::Length(1),
@@ -199,7 +274,10 @@ impl Model {
         ]);
         let [title_area, underline_area, main_area] = vertical.areas(frame.area());
 
-        let text = Text::raw(self.title.as_str()).bold();
+        let mut text = Text::raw(self.title.as_str()).bold();
+        if self.title.is_empty() {
+            text = Text::raw("Neue ToDo Liste").dark_gray().italic();
+        }
         frame.render_widget(text, title_area);
 
         let text = Text::raw("=".repeat(self.title.len())).bold();
@@ -212,6 +290,9 @@ impl Model {
 
     pub fn cursor_position(&mut self) -> Option<(u16, u16)> {
         if let Some(y) = self.cursor_y {
+            if self.edit_title {
+                return Some((u16::try_from(y).unwrap(), 0));
+            }
             if self.is_selected {
                 if let Some(todo) = self.todos.get(self.index) {
                     return Some((
@@ -281,6 +362,8 @@ pub enum Command {
     InsertBelow,
     Delete,
     Save,
+    InsertTitle,
+    AppendTitle,
 }
 
 impl Command {
@@ -299,6 +382,8 @@ impl Command {
             (crokey::key! {o}, Self::InsertBelow),
             (crokey::key! {d}, Self::Delete),
             (crokey::key! {s}, Self::Save),
+            (crokey::key! {t}, Self::AppendTitle),
+            (crokey::key! {shift-t}, Self::InsertTitle),
         ]
         .into_iter()
     }
@@ -394,6 +479,18 @@ impl Command {
             }
             Self::Save => {
                 model.save()?;
+            }
+            Self::InsertTitle => {
+                model.edit_title = true;
+                model.cursor_y = Some(0);
+                model.unselect();
+                model.is_selected = false;
+            }
+            Self::AppendTitle => {
+                model.edit_title = true;
+                model.cursor_y = Some(model.title.chars().count());
+                model.unselect();
+                model.is_selected = false;
             }
         }
 

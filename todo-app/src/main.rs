@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     let data = fs::read_to_string(&path)
         .or_else(|err| {
             if err.kind() == io::ErrorKind::NotFound {
-                Ok(r#"title = "Neue TODO Liste""#.into())
+                Ok(String::new())
             } else {
                 Err(err)
             }
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     model.path = path;
     model.keybindings.extend(config.keybindings);
 
-    model.update(None)?;
+    model.did_load();
 
     let terminal = ratatui::init();
     let _tty_mode_guard = TtyModes::enable();
