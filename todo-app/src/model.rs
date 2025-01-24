@@ -65,6 +65,9 @@ pub struct Model {
 
     #[serde(skip)]
     redo_buffer: Vec<UndoAction>,
+
+    #[serde(skip)]
+    paste_buffer: Option<Todo>,
 }
 
 impl Model {
@@ -399,6 +402,9 @@ pub enum Command {
     AppendTitle,
     Undo,
     Redo,
+    Copy,
+    PasteAbove,
+    PasteBelow,
 }
 
 impl Command {
@@ -421,6 +427,9 @@ impl Command {
             (crokey::key! {shift-t}, Self::InsertTitle),
             (crokey::key! {u}, Self::Undo),
             (crokey::key! {shift-u}, Self::Redo),
+            (crokey::key! {y}, Self::Copy),
+            (crokey::key! {p}, Self::PasteBelow),
+            (crokey::key! {shift-p}, Self::PasteAbove),
         ]
         .into_iter()
     }
@@ -546,6 +555,7 @@ impl Command {
             Self::Delete => {
                 model.change_selection(|model| {
                     let todo = model.todos.remove(model.index);
+                    model.paste_buffer = Some(todo.clone());
                     model.push_undo(UndoAction::Insert {
                         index: model.index,
                         todo,
@@ -590,6 +600,29 @@ impl Command {
                 }
                 break;
             },
+            Self::Copy => {
+                model.paste_buffer = model.with_selected_or_select(|t| Todo {
+                    selected: false,
+                    ..t.clone()
+                })
+            }
+            Self::PasteBelow => {
+                if let Some(todo) = model.paste_buffer.clone() {
+                    model.change_selection(|model| {
+                        model.todos.insert(model.index + 1, todo);
+                        model.index += 1;
+                    });
+                    model.push_undo_delete();
+                }
+            }
+            Self::PasteAbove => {
+                if let Some(todo) = model.paste_buffer.clone() {
+                    model.change_selection(|model| {
+                        model.todos.insert(model.index, todo);
+                    });
+                    model.push_undo_delete();
+                }
+            }
         }
 
         Ok(ControlFlow::Continue(()))

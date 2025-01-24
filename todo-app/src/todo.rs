@@ -4,7 +4,7 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Todo {
     #[serde(default, skip_serializing_if = "is_zero")]
