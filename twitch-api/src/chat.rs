@@ -151,21 +151,21 @@ impl Request for SendChatAnnouncementRequest {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub enum ChatAnnouncementColor {
-    #[serde(rename = "blue")]
+    #[serde(rename = "blue", alias = "BLUE")]
     Blue,
 
-    #[serde(rename = "green")]
+    #[serde(rename = "green", alias = "GREEN")]
     Green,
 
-    #[serde(rename = "orange")]
+    #[serde(rename = "orange", alias = "ORANGE")]
     Orange,
 
-    #[serde(rename = "purple")]
+    #[serde(rename = "purple", alias = "PURPLE")]
     Purple,
 
     #[default]
-    #[serde(rename = "primary")]
+    #[serde(rename = "primary", alias = "PRIMARY")]
     Primary,
 }

@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{
     collections::HashMap,
     fmt::Write as _,
@@ -19,7 +20,10 @@ use twitch_api::{
     },
     client::Client,
     events::{
-        chat::{ChatMessage, ChatMessageCondition},
+        chat::{
+            message::{ChatMessage, ChatMessageCondition},
+            notification::{ChatNotification, ChatNotificationCondition, ChatNotificationType},
+        },
         follow::{Follow, FollowCondition},
         stream::{StreamOffline, StreamOfflineCondition, StreamOnline, StreamOnlineCondition},
         subscription::{
@@ -107,6 +111,20 @@ impl cmd::Run {
         let res = client
             .send(&CreateSubscriptionRequest::new::<ChatMessage>(
                 &ChatMessageCondition {
+                    broadcaster_user_id: user.id.clone(),
+                    user_id: user.id.clone(),
+                },
+                TransportRequest::WebSocket {
+                    session_id: ws.session_id().clone(),
+                },
+            )?)
+            .await
+            .context("create subscription")?;
+        eprintln!("{res:#?}");
+
+        let res = client
+            .send(&CreateSubscriptionRequest::new::<ChatNotification>(
+                &ChatNotificationCondition {
                     broadcaster_user_id: user.id.clone(),
                     user_id: user.id.clone(),
                 },
@@ -253,6 +271,29 @@ impl cmd::Run {
                             message.chatter_user_name.with(color).bold(),
                             message.message.text,
                         );
+                    } else if let Some(notification) = notification.event::<ChatNotification>()? {
+                        sound_system.play_sound_for_event(Event::Message);
+                        // eprintln!("{notification:#?}");
+
+                        if let Some(poll) = &mut poll {
+                            poll.vote(&notification.chatter_user_id, &notification.message.text);
+                        }
+
+                        let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
+                        let color = parse_color(&notification.color, &notification.chatter_user_id);
+                        println!(
+                            "{} {} {} {}{}{}",
+                            timestamp.format("%T").to_string().dark_grey(),
+                            notification.chatter_user_name.with(color).bold(),
+                            print_notification_type(&notification.notice_type),
+                            notification.system_message.as_str().italic(),
+                            if notification.system_message.is_empty() {
+                                ""
+                            } else {
+                                "\n"
+                            },
+                            notification.message.text,
+                        );
                     } else if let Some(follow) = notification.event::<Follow>()? {
                         sound_system.play_sound_for_event(Event::Follow);
                         // eprintln!("{follow:#?}");
@@ -295,7 +336,6 @@ impl cmd::Run {
                         let _ = offline;
 
                         let timestamp = timestamp.with_timezone(&chrono_tz::Europe::Berlin);
-                        let _ = dbg!(client.send(&StreamsRequest::user_id(user.id.clone())).await);
                         let channel = client
                             .send(&ChannelsRequest::id(user.id.clone()))
                             .await
@@ -313,7 +353,7 @@ impl cmd::Run {
                     }
                 }
                 Item::SendMessage { message } => {
-                    let message = if let Some(message) = message.strip_prefix('#') {
+                    let message = if let Some(message) = message.strip_prefix('/') {
                         let (cmd, text) = message.split_once(' ').unwrap_or((message, ""));
                         match (cmd, text) {
                             ("poll", _) => {
@@ -358,7 +398,7 @@ impl cmd::Run {
                                 continue;
                             }
                             _ => {
-                                eprintln!("unknown command: #{cmd} {text:?}");
+                                eprintln!("unknown command: /{cmd} {text:?}");
                                 continue;
                             }
                         }
@@ -471,6 +511,42 @@ fn random_color(user_id: &str) -> Color {
         Color::Grey,
     ];
     COLORS[(hash % COLORS.len() as u64) as usize]
+}
+
+fn print_notification_type(ty: &ChatNotificationType) -> impl fmt::Display {
+    match ty {
+        ChatNotificationType::Sub { .. } => "sub",
+        ChatNotificationType::Resub { .. } => "resub",
+        ChatNotificationType::SubGift { .. } => "sub_gift",
+        ChatNotificationType::CommunitySubGift { .. } => "community_sub_gift",
+        ChatNotificationType::GiftPaidUpgrade { .. } => "gift_paid_upgrade",
+        ChatNotificationType::PrimePaidUpgrade { .. } => "prime_paid_upgrade",
+        ChatNotificationType::Raid { .. } => "raid",
+        ChatNotificationType::Unraid { .. } => "unraid",
+        ChatNotificationType::PayItForward { .. } => "pay_it_forward",
+        ChatNotificationType::Announcement { announcement } => {
+            return "announcement".italic().with(match announcement.color {
+                ChatAnnouncementColor::Blue => Color::Blue,
+                ChatAnnouncementColor::Green => Color::Green,
+                ChatAnnouncementColor::Orange => Color::DarkYellow,
+                ChatAnnouncementColor::Purple => Color::Magenta,
+                ChatAnnouncementColor::Primary => Color::DarkGrey,
+            });
+        }
+        ChatNotificationType::BitsBadgeTier { .. } => "bits_badge_tier",
+        ChatNotificationType::CharityDonation { .. } => "charity_donation",
+        ChatNotificationType::SharedChatSub { .. } => "shared_chat_sub",
+        ChatNotificationType::SharedChatResub { .. } => "shared_chat_resub",
+        ChatNotificationType::SharedChatSubGift { .. } => "shared_chat_sub_gift",
+        ChatNotificationType::SharedChatCommunitySubGift { .. } => "shared_chat_community_sub_gift",
+        ChatNotificationType::SharedChatGiftPaidUpgrade { .. } => "shared_chat_gift_paid_upgrade",
+        ChatNotificationType::SharedChatPrimePaidUpgrade { .. } => "shared_chat_prime_paid_upgrade",
+        ChatNotificationType::SharedChatRaid { .. } => "shared_chat_raid",
+        ChatNotificationType::SharedChatPayItForward { .. } => "shared_chat_pay_it_forward",
+        ChatNotificationType::SharedChatAnnouncement { .. } => "shared_chat_announcement",
+    }
+    .italic()
+    .dark_grey()
 }
 
 impl cmd::Eventsub {
