@@ -1,6 +1,8 @@
 use std::{cell::RefCell, fs, ops::ControlFlow, path::PathBuf, time::Duration};
 
-use crossterm::event::{Event, KeyCode};
+use anyhow::{Context, Result};
+use crokey::KeyCombination;
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Layout},
     style::Stylize,
@@ -10,7 +12,7 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{todo::Todo, CharToByteIndex};
+use crate::{config::Keybindings, todo::Todo, CharToByteIndex};
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +24,9 @@ pub struct Model {
 
     #[serde(skip)]
     pub path: PathBuf,
+
+    #[serde(skip)]
+    pub keybindings: Keybindings,
 
     #[serde(skip)]
     pub list_state: RefCell<ListState>,
@@ -41,155 +46,45 @@ impl Model {
     // pub fn apply_change(&mut self, change: ChangeEvent);
     // pub fn change_change(&mut self, change: ChangeEvent);
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<()> {
         fs::write(
             self.path.as_path(),
-            toml::to_string(self).expect("failed to serialize data"),
+            toml::to_string(self).context("serialize data")?,
         )
-        .expect("failed to write data");
+        .context("write data")
     }
 
-    pub fn update(&mut self, event: Option<Event>) -> ControlFlow<()> {
+    pub fn update(&mut self, event: Option<Event>) -> Result<ControlFlow<()>> {
         if let Some(cursor_y) = self.cursor_y {
-            self.update_insert(event, cursor_y);
-            return ControlFlow::Continue(());
-        }
-
-        if matches!(event, Some(Event::Key(key)) if key.code == KeyCode::Char('q')) {
-            return ControlFlow::Break(());
+            return self.update_insert(event, cursor_y);
         }
 
         if let Some(event) = event {
-            self.update_inner(event);
+            self.update_normal(event)
         } else {
             self.update_timeout();
+            Ok(ControlFlow::Continue(()))
         }
-
-        ControlFlow::Continue(())
     }
 
-    fn update_inner(&mut self, event: Event) {
-        let list_state = self.list_state.get_mut();
+    fn update_normal(&mut self, event: Event) -> Result<ControlFlow<()>> {
         match event {
             Event::FocusGained => {}
             Event::FocusLost => {
-                with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                list_state.select(None);
+                return Command::Leave.run(self);
             }
-            Event::Key(event) => match event.code {
-                KeyCode::Char('j') => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                    }
-                    list_state.select_next();
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
+            Event::Key(event) if event.kind == KeyEventKind::Press => {
+                let key: KeyCombination = event.into();
+                if let Some(command) = self.keybindings.normal.get(&key).copied() {
+                    return command.run(self);
                 }
-                KeyCode::Char('k') => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                    }
-                    list_state.select_previous();
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                }
-                KeyCode::Esc => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                    } else {
-                        list_state.select(None);
-                    }
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                }
-                KeyCode::Char(' ') => {
-                    with_selected(list_state, &mut self.todos, |t| t.state.next());
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                        with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                    }
-                }
-                KeyCode::Char('>') => {
-                    with_selected(list_state, &mut self.todos, |t| t.level_incr());
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                        with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                    }
-                }
-                KeyCode::Char('<') => {
-                    with_selected(list_state, &mut self.todos, |t| {
-                        t.level_decr();
-                    });
-                    if list_state.selected().is_none() {
-                        list_state.select(self.prev_selected);
-                        with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                    }
-                }
-                KeyCode::Char('i') => {
-                    self.cursor_y = Some(0);
-                }
-                KeyCode::Char('a') => {
-                    if let Some(index) = list_state.selected() {
-                        if let Some(todo) = self.todos.get(index) {
-                            self.cursor_y = Some(todo.text.chars().count());
-                        }
-                    }
-                }
-                KeyCode::Char('o') => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if let Some(index) = list_state.selected() {
-                        if let Some(todo) = self.todos.get(index) {
-                            self.todos.insert(
-                                index + 1,
-                                Todo {
-                                    level: todo.level,
-                                    ..Default::default()
-                                },
-                            );
-                            list_state.select(Some(index + 1));
-                            self.cursor_y = Some(0);
-                        }
-                    }
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                }
-                KeyCode::Char('O') => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if let Some(index) = list_state.selected() {
-                        if let Some(todo) = self.todos.get(index) {
-                            self.todos.insert(
-                                index,
-                                Todo {
-                                    level: todo.level,
-                                    ..Default::default()
-                                },
-                            );
-                            self.cursor_y = Some(0);
-                        }
-                    }
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                }
-                KeyCode::Char('d') => {
-                    with_selected(list_state, &mut self.todos, |t| t.selected = false);
-                    if let Some(index) = list_state.selected() {
-                        if index < self.todos.len() {
-                            self.todos.remove(index);
-                        }
-                    }
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
-                }
-                KeyCode::Char('s') => {
-                    self.save();
-                }
-                _ => {}
-            },
+            }
+            Event::Key(_) => {}
             Event::Mouse(_) => {}
             Event::Paste(_) => {}
             Event::Resize(_, _) => {}
         }
-        if let Some(index) = self.list_state.get_mut().selected() {
-            self.prev_selected = Some(index);
-            self.timeout = Some(Duration::from_secs(10));
-        }
+        Ok(ControlFlow::Continue(()))
     }
 
     fn update_timeout(&mut self) {
@@ -200,74 +95,91 @@ impl Model {
         self.timeout = None;
     }
 
-    fn update_insert(&mut self, event: Option<Event>, cursor_y: usize) {
+    fn update_insert(
+        &mut self,
+        event: Option<Event>,
+        mut cursor_y: usize,
+    ) -> Result<ControlFlow<()>> {
         self.timeout = None;
         let Some(event) = event else {
-            return;
+            return Ok(ControlFlow::Continue(()));
         };
 
         let list_state = self.list_state.get_mut();
         let Some(index) = list_state.selected() else {
             self.cursor_y = None;
-            return;
+            return Ok(ControlFlow::Continue(()));
         };
         let Some(todo) = self.todos.get_mut(index) else {
             self.cursor_y = None;
-            return;
+            return Ok(ControlFlow::Continue(()));
         };
+
+        let chars = todo.text.chars().count();
+        if cursor_y > chars {
+            cursor_y = chars;
+            self.cursor_y = Some(cursor_y);
+        }
 
         match event {
             Event::FocusGained => {}
             Event::FocusLost => {}
-            Event::Key(event) => match event.code {
-                KeyCode::Esc => {
-                    self.cursor_y = None;
-                }
-                KeyCode::Left => {
-                    self.cursor_y = Some(cursor_y.saturating_sub(1));
-                }
-                KeyCode::Right if cursor_y < todo.text.chars().count() => {
-                    self.cursor_y = Some(cursor_y + 1);
-                }
-                KeyCode::Backspace => {
-                    let Some(y) = cursor_y.checked_sub(1) else {
-                        return;
-                    };
-                    todo.text.remove(todo.text.char_to_byte_index(y));
-                    self.cursor_y = Some(y);
-                }
-                KeyCode::Delete => {
-                    let index = todo.text.char_to_byte_index(cursor_y);
-                    if index < todo.text.len() {
-                        todo.text.remove(index);
+            Event::Key(event) => {
+                if event.kind == KeyEventKind::Press {
+                    let key: KeyCombination = event.into();
+                    if let Some(command) = self.keybindings.insert.get(&key) {
+                        return command.run(self);
                     }
                 }
-                KeyCode::Enter => {
-                    todo.selected = false;
-                    if let Some(index) = list_state.selected() {
-                        let level = todo.level;
-                        self.todos.insert(
-                            index + 1,
-                            Todo {
-                                level,
-                                ..Default::default()
-                            },
-                        );
-                        list_state.select(Some(index + 1));
-                        self.cursor_y = Some(0);
+                match event.code {
+                    KeyCode::Left => {
+                        self.cursor_y = Some(cursor_y.saturating_sub(1));
                     }
-                    with_selected(list_state, &mut self.todos, |t| t.selected = true);
+                    KeyCode::Right if cursor_y < chars => {
+                        self.cursor_y = Some(cursor_y + 1);
+                    }
+                    KeyCode::Backspace => {
+                        let Some(y) = cursor_y.checked_sub(1) else {
+                            return Ok(ControlFlow::Continue(()));
+                        };
+                        todo.text.remove(todo.text.char_to_byte_index(y));
+                        self.cursor_y = Some(y);
+                    }
+                    KeyCode::Delete => {
+                        let index = todo.text.char_to_byte_index(cursor_y);
+                        if index < todo.text.len() {
+                            todo.text.remove(index);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        todo.selected = false;
+                        if let Some(index) = list_state.selected() {
+                            let level = todo.level;
+                            self.todos.insert(
+                                index + 1,
+                                Todo {
+                                    level,
+                                    ..Default::default()
+                                },
+                            );
+                            list_state.select(Some(index + 1));
+                            self.cursor_y = Some(0);
+                        }
+                        with_selected(list_state, &mut self.todos, |t| t.selected = true);
+                    }
+                    KeyCode::Char(c) => {
+                        todo.text.insert(todo.text.char_to_byte_index(cursor_y), c);
+                        self.cursor_y = Some(cursor_y + 1);
+                    }
+                    _ => {}
                 }
-                KeyCode::Char(c) => {
-                    todo.text.insert(todo.text.char_to_byte_index(cursor_y), c);
-                    self.cursor_y = Some(cursor_y + 1);
-                }
-                _ => {}
-            },
+            }
             Event::Mouse(_) => {}
             Event::Paste(_) => {}
             Event::Resize(_, _) => {}
         }
+
+        Ok(ControlFlow::Continue(()))
     }
 
     pub fn draw(&self, frame: &mut Frame) {
@@ -310,5 +222,173 @@ fn with_selected(list_state: &mut ListState, todos: &mut [Todo], f: impl FnOnce(
         if let Some(todo) = todos.get_mut(index) {
             f(todo);
         }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Command {
+    Quit,
+    GoDown,
+    GoUp,
+    Leave,
+    Toggle,
+    Indent,
+    Outdent,
+    Insert,
+    Append,
+    InsertAbove,
+    InsertBelow,
+    Delete,
+    Save,
+}
+
+impl Command {
+    pub fn normal_keybindings() -> impl Iterator<Item = (KeyCombination, Self)> {
+        [
+            (crokey::key! {q}, Self::Quit),
+            (crokey::key! {j}, Self::GoDown),
+            (crokey::key! {k}, Self::GoUp),
+            (crokey::key! {esc}, Self::Leave),
+            (crokey::key! {space}, Self::Toggle),
+            (crokey::key! {'>'}, Self::Indent),
+            (crokey::key! {'<'}, Self::Outdent),
+            (crokey::key! {i}, Self::Insert),
+            (crokey::key! {a}, Self::Append),
+            (crokey::key! {shift-o}, Self::InsertAbove),
+            (crokey::key! {o}, Self::InsertBelow),
+            (crokey::key! {d}, Self::Delete),
+            (crokey::key! {s}, Self::Save),
+        ]
+        .into_iter()
+    }
+
+    pub fn insert_keybindings() -> impl Iterator<Item = (KeyCombination, Self)> {
+        [
+            (crokey::key! {esc}, Self::Leave),
+            (crokey::key! {alt-'>'}, Self::Indent),
+            (crokey::key! {alt-'<'}, Self::Outdent),
+        ]
+        .into_iter()
+    }
+
+    fn run(self, model: &mut Model) -> Result<ControlFlow<()>> {
+        let list_state = model.list_state.get_mut();
+        match self {
+            Self::Quit => return Ok(ControlFlow::Break(())),
+            Self::GoDown => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                }
+                list_state.select_next();
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::GoUp => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                }
+                list_state.select_previous();
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::Leave if model.cursor_y.is_some() => {
+                model.cursor_y = None;
+            }
+            Self::Leave => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                } else {
+                    list_state.select(None);
+                }
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::Toggle => {
+                with_selected(list_state, &mut model.todos, |t| t.state.next());
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                    with_selected(list_state, &mut model.todos, |t| t.selected = true);
+                }
+            }
+            Self::Indent => {
+                with_selected(list_state, &mut model.todos, |t| t.level_incr());
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                    with_selected(list_state, &mut model.todos, |t| t.selected = true);
+                }
+            }
+            Self::Outdent => {
+                with_selected(list_state, &mut model.todos, |t| {
+                    t.level_decr();
+                });
+                if list_state.selected().is_none() {
+                    list_state.select(model.prev_selected);
+                    with_selected(list_state, &mut model.todos, |t| t.selected = true);
+                }
+            }
+            Self::Insert => {
+                model.cursor_y = Some(0);
+            }
+            Self::Append => {
+                if let Some(index) = list_state.selected() {
+                    if let Some(todo) = model.todos.get(index) {
+                        model.cursor_y = Some(todo.text.chars().count());
+                    }
+                }
+            }
+            Self::InsertBelow => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if let Some(index) = list_state.selected() {
+                    if let Some(todo) = model.todos.get(index) {
+                        model.todos.insert(
+                            index + 1,
+                            Todo {
+                                level: todo.level,
+                                ..Default::default()
+                            },
+                        );
+                        list_state.select(Some(index + 1));
+                        model.cursor_y = Some(0);
+                    }
+                }
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::InsertAbove => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if let Some(index) = list_state.selected() {
+                    if let Some(todo) = model.todos.get(index) {
+                        model.todos.insert(
+                            index,
+                            Todo {
+                                level: todo.level,
+                                ..Default::default()
+                            },
+                        );
+                        model.cursor_y = Some(0);
+                    }
+                }
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::Delete => {
+                with_selected(list_state, &mut model.todos, |t| t.selected = false);
+                if let Some(index) = list_state.selected() {
+                    if index < model.todos.len() {
+                        model.todos.remove(index);
+                    }
+                }
+                with_selected(list_state, &mut model.todos, |t| t.selected = true);
+            }
+            Self::Save => {
+                model.save()?;
+            }
+        }
+
+        if let Some(index) = model.list_state.get_mut().selected() {
+            model.prev_selected = Some(index);
+            model.timeout = Some(Duration::from_secs(10));
+        }
+
+        Ok(ControlFlow::Continue(()))
     }
 }

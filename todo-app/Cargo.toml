@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.95"
+crokey = "1.1.0"
 crossterm = "0.28.1"
+directories = "6.0.0"
 ratatui = "0.29.0"
 serde = { version = "1.0.217", features = ["derive"] }
 toml = { version = "0.8.19", features = ["preserve_order"] }
