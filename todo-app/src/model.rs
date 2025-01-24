@@ -1,4 +1,6 @@
-use std::{cell::RefCell, fs, ops::ControlFlow, path::PathBuf, time::Duration};
+use std::{
+    cell::RefCell, collections::VecDeque, fs, mem, ops::ControlFlow, path::PathBuf, time::Duration,
+};
 
 use anyhow::{Context, Result};
 use crokey::KeyCombination;
@@ -12,9 +14,17 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{config::Keybindings, todo::Todo, CharToByteIndex};
+use crate::{
+    config::Keybindings,
+    todo::{State, Todo},
+    CharToByteIndex,
+};
 
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub fn default_undo_steps() -> usize {
+    4096
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     #[serde(default)]
@@ -46,6 +56,15 @@ pub struct Model {
 
     #[serde(skip)]
     cursor_y: Option<usize>,
+
+    #[serde(skip)]
+    pub max_undo: usize,
+
+    #[serde(skip)]
+    undo_buffer: VecDeque<UndoAction>,
+
+    #[serde(skip)]
+    redo_buffer: Vec<UndoAction>,
 }
 
 impl Model {
@@ -73,6 +92,18 @@ impl Model {
         }
     }
 
+    fn push_undo(&mut self, action: UndoAction) {
+        self.redo_buffer = Vec::new();
+        if self.undo_buffer.len() >= self.max_undo {
+            self.undo_buffer.pop_front();
+        }
+        self.undo_buffer.push_back(action);
+    }
+
+    fn push_undo_delete(&mut self) {
+        self.push_undo(UndoAction::Delete { index: self.index });
+    }
+
     pub fn update(&mut self, event: Option<Event>) -> Result<ControlFlow<()>> {
         let result = if let Some(cursor_y) = self.cursor_y {
             if self.edit_title {
@@ -86,6 +117,7 @@ impl Model {
 
         if self.todos.is_empty() {
             self.todos.push(Todo::default());
+            self.push_undo_delete();
             self.reselect();
         }
 
@@ -180,6 +212,7 @@ impl Model {
                             model.index += 1;
                             model.cursor_y = Some(0);
                         });
+                        self.push_undo_delete();
                     }
                     Some(Some(y)) => {
                         self.cursor_y = Some(y);
@@ -344,7 +377,7 @@ impl Model {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Command {
     Quit,
@@ -364,6 +397,8 @@ pub enum Command {
     Save,
     InsertTitle,
     AppendTitle,
+    Undo,
+    Redo,
 }
 
 impl Command {
@@ -384,6 +419,8 @@ impl Command {
             (crokey::key! {s}, Self::Save),
             (crokey::key! {t}, Self::AppendTitle),
             (crokey::key! {shift-t}, Self::InsertTitle),
+            (crokey::key! {u}, Self::Undo),
+            (crokey::key! {shift-u}, Self::Redo),
         ]
         .into_iter()
     }
@@ -426,19 +463,54 @@ impl Command {
                 model.reselect();
             }
             Self::Toggle => {
-                model.with_selected_or_select(|t| t.state.next());
+                if let Some(state) = model.with_selected_or_select(|t| {
+                    let state = t.state;
+                    t.state.next();
+                    state
+                }) {
+                    model.push_undo(UndoAction::SetState {
+                        index: model.index,
+                        state,
+                    });
+                }
             }
             Self::Indent => {
-                model.with_selected_or_select(|t| t.level_incr());
+                if let Some(level) = model.with_selected_or_select(|t| {
+                    let level = t.level;
+                    t.level_incr();
+                    level
+                }) {
+                    model.push_undo(UndoAction::SetLevel {
+                        index: model.index,
+                        level,
+                    });
+                }
             }
             Self::Outdent => {
-                model.with_selected_or_select(|t| t.level_decr());
+                if let Some(level) = model.with_selected_or_select(|t| {
+                    let level = t.level;
+                    t.level_decr();
+                    level
+                }) {
+                    model.push_undo(UndoAction::SetLevel {
+                        index: model.index,
+                        level,
+                    });
+                }
             }
             Self::Insert => {
                 model.cursor_y = model.with_selected_or_select(|_| 0);
+                model.push_undo(UndoAction::SetText {
+                    index: model.index,
+                    text: model.todos[model.index].text.clone(),
+                });
             }
             Self::Append => {
                 model.cursor_y = model.with_selected_or_select(|t| t.text.chars().count());
+                model.push_undo(UndoAction::SetText {
+                    index: model.index,
+                    text: model.todos[model.index].text.clone(),
+                });
             }
             Self::InsertBelow => {
                 if let Some(level) = model.with_selected_or_select(|t| t.level) {
@@ -453,6 +525,7 @@ impl Command {
                         model.index += 1;
                         model.cursor_y = Some(0);
                     });
+                    model.push_undo_delete();
                 }
             }
             Self::InsertAbove => {
@@ -467,11 +540,16 @@ impl Command {
                         );
                         model.cursor_y = Some(0);
                     });
+                    model.push_undo_delete();
                 }
             }
             Self::Delete => {
                 model.change_selection(|model| {
-                    model.todos.remove(model.index);
+                    let todo = model.todos.remove(model.index);
+                    model.push_undo(UndoAction::Insert {
+                        index: model.index,
+                        todo,
+                    });
                     if model.index >= model.todos.len() {
                         model.index = model.todos.len().saturating_sub(1);
                     }
@@ -492,8 +570,83 @@ impl Command {
                 model.unselect();
                 model.is_selected = false;
             }
+            Self::Undo => loop {
+                if let Some(action) = model.undo_buffer.pop_back() {
+                    let redo = action.run(model);
+                    model.redo_buffer.push(redo);
+                    if model.todos.is_empty() {
+                        continue;
+                    }
+                }
+                break;
+            },
+            Self::Redo => loop {
+                if let Some(action) = model.redo_buffer.pop() {
+                    let undo = action.run(model);
+                    model.undo_buffer.push_back(undo);
+                    if model.todos.is_empty() {
+                        continue;
+                    }
+                }
+                break;
+            },
         }
 
         Ok(ControlFlow::Continue(()))
+    }
+}
+
+#[derive(Debug)]
+enum UndoAction {
+    // undo of insert
+    Delete { index: usize },
+
+    // undo of delete
+    Insert { index: usize, todo: Todo },
+
+    SetText { index: usize, text: String },
+
+    SetLevel { index: usize, level: usize },
+
+    SetState { index: usize, state: State },
+}
+
+impl UndoAction {
+    fn run(self, model: &mut Model) -> Self {
+        model.unselect();
+        model.is_selected = true;
+        let reverse = match self {
+            Self::Delete { index } => {
+                let todo = model.todos.remove(index);
+                model.index = if index < model.todos.len() {
+                    index
+                } else {
+                    model.todos.len().saturating_sub(1)
+                };
+                Self::Insert { index, todo }
+            }
+            Self::Insert { index, todo } => {
+                model.index = index;
+                model.todos.insert(index, todo);
+                Self::Delete { index }
+            }
+            Self::SetText { index, text } => {
+                model.index = index;
+                let text = mem::replace(&mut model.todos[index].text, text);
+                Self::SetText { index, text }
+            }
+            Self::SetLevel { index, level } => {
+                model.index = index;
+                let level = mem::replace(&mut model.todos[index].level, level);
+                Self::SetLevel { index, level }
+            }
+            Self::SetState { index, state } => {
+                model.index = index;
+                let state = mem::replace(&mut model.todos[index].state, state);
+                Self::SetState { index, state }
+            }
+        };
+        model.reselect();
+        reverse
     }
 }

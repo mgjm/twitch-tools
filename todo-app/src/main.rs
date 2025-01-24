@@ -30,6 +30,7 @@ fn main() -> Result<()> {
     let mut model: Model = toml::from_str(&data).context("parse data")?;
     model.path = path;
     model.keybindings.extend(config.keybindings);
+    model.max_undo = config.undo_steps;
 
     model.did_load();
 

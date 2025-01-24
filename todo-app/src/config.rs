@@ -5,11 +5,14 @@ use crokey::KeyCombination;
 use directories::ProjectDirs;
 use serde::Deserialize;
 
-use crate::model::Command;
+use crate::model::{default_undo_steps, Command};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default = "default_undo_steps")]
+    pub undo_steps: usize,
+
     #[serde(default = "Keybindings::empty")]
     pub keybindings: Keybindings,
 }
@@ -36,7 +39,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Keybindings {
     #[serde(default)]
