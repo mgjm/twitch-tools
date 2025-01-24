@@ -18,10 +18,20 @@ fn main() -> Result<()> {
         .nth(1)
         .context("missing data path argument")?
         .into();
-    let data = fs::read_to_string(&path).context("open data file")?;
+    let data = fs::read_to_string(&path)
+        .or_else(|err| {
+            if err.kind() == io::ErrorKind::NotFound {
+                Ok(r#"title = "Neue TODO Liste""#.into())
+            } else {
+                Err(err)
+            }
+        })
+        .context("open data file")?;
     let mut model: Model = toml::from_str(&data).context("parse data")?;
     model.path = path;
     model.keybindings.extend(config.keybindings);
+
+    model.update(None)?;
 
     let terminal = ratatui::init();
     let _tty_mode_guard = TtyModes::enable();

@@ -64,6 +64,11 @@ impl Model {
             self.update_normal(event)
         };
 
+        if self.todos.is_empty() {
+            self.todos.push(Todo::default());
+            self.reselect();
+        }
+
         self.timeout = if self.is_selected && self.cursor_y.is_none() {
             Some(Duration::from_secs(10))
         } else {
