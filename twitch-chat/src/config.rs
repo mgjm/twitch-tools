@@ -15,6 +15,9 @@ use crate::chat::Command;
 pub struct Config {
     pub store: StoreConfig,
 
+    #[serde(with = "timezone")]
+    pub timezone: chrono_tz::Tz,
+
     #[serde(rename = "output", default)]
     pub outputs: HashMap<String, OutputConfig>,
 
@@ -128,5 +131,40 @@ impl Keybindings {
     pub fn extend(&mut self, other: Self) {
         self.normal.extend(other.normal);
         self.insert.extend(other.insert);
+    }
+}
+
+mod timezone {
+    use std::fmt;
+
+    use chrono_tz::Tz;
+    use serde::{
+        Deserializer,
+        de::{Unexpected, Visitor},
+    };
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Tz, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct TzVisitor;
+
+        impl Visitor<'_> for TzVisitor {
+            type Value = Tz;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a timezone")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                v.parse()
+                    .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))
+            }
+        }
+
+        deserializer.deserialize_str(TzVisitor)
     }
 }

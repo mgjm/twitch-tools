@@ -74,7 +74,7 @@ impl Store {
 
     fn update_today(&mut self) -> Result<()> {
         let today = chrono::Utc::now()
-            .with_timezone(&chrono_tz::Europe::Berlin)
+            .with_timezone(crate::timezone())
             .date_naive();
         let events = if self.files.contains(&today) {
             self.load_file(today)?.collect::<Result<_>>()?

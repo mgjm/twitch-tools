@@ -1,6 +1,7 @@
-use std::io;
+use std::{io, sync::OnceLock};
 
 use anyhow::{Context, Result};
+use chrono_tz::Tz;
 use clap::Parser;
 use config::Keybindings;
 use crossterm::event;
@@ -57,9 +58,20 @@ async fn run() -> Result<()> {
     }
 }
 
+static TIMEZONE: OnceLock<Tz> = OnceLock::new();
+
+fn timezone() -> &'static Tz {
+    TIMEZONE.get().expect("timezone not set")
+}
+
 impl cmd::Run {
     async fn run(&self) -> Result<()> {
         let config = crate::config::Config::open(&self.config)?;
+        anyhow::ensure!(
+            TIMEZONE.set(config.timezone).is_ok(),
+            "timezone already set",
+        );
+
         let mut keybindings = Keybindings::default();
         keybindings.extend(config.keybindings);
 

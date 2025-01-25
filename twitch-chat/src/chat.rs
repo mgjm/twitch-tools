@@ -667,7 +667,7 @@ trait ToSpan {
 impl ToSpan for DateTime<Utc> {
     fn to_span(&self) -> Span<'static> {
         Span::raw(
-            self.with_timezone(&chrono_tz::Europe::Berlin)
+            self.with_timezone(crate::timezone())
                 .format("%T ")
                 .to_string(),
         )
