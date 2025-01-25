@@ -5,16 +5,24 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use crokey::KeyCombination;
 use serde::{Deserialize, Deserializer};
+
+use crate::chat::Command;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    pub store: StoreConfig,
+
     #[serde(rename = "output", default)]
     pub outputs: HashMap<String, OutputConfig>,
 
     #[serde(rename = "sound", default)]
     pub sounds: Vec<SoundConfig>,
+
+    #[serde(default = "Keybindings::empty")]
+    pub keybindings: Keybindings,
 }
 
 impl Config {
@@ -22,6 +30,12 @@ impl Config {
         let config = fs::read_to_string(path).context("read config file")?;
         toml::from_str(&config).context("parse config file")
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreConfig {
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,4 +96,37 @@ where
             }
         }
     })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Keybindings {
+    #[serde(default)]
+    pub normal: HashMap<KeyCombination, Command>,
+
+    #[serde(default)]
+    pub insert: HashMap<KeyCombination, Command>,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            normal: Command::normal_keybindings().collect(),
+            insert: Command::insert_keybindings().collect(),
+        }
+    }
+}
+
+impl Keybindings {
+    pub fn empty() -> Self {
+        Self {
+            normal: HashMap::new(),
+            insert: HashMap::new(),
+        }
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.normal.extend(other.normal);
+        self.insert.extend(other.insert);
+    }
 }

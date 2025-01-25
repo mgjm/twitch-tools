@@ -95,7 +95,7 @@ impl StreamsResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Stream {
     /// An ID that identifies the stream. You can use this ID later to look up the video on demand (VOD).
     pub id: String,
@@ -144,7 +144,6 @@ pub struct Stream {
     /// IMPORTANT As of February 28, 2023, this field is deprecated and returns only an empty array. If you use this field, please update your code to use the tags field.
     ///
     /// The list of tags that apply to the stream. The list contains IDs only when the channel is steaming live. For a list of possible tags, see List of All Tags. The list doesn’t include Category Tags.
-    #[expect(dead_code)]
     tag_ids: Vec<String>,
 
     /// A Boolean value that indicates whether the stream is meant for mature audiences.

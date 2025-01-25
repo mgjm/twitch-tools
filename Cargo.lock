@@ -377,6 +377,7 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.6.0",
  "crossterm_winapi",
+ "futures-core",
  "mio",
  "parking_lot",
  "rustix",
@@ -1702,9 +1703,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.135"
+version = "1.0.137"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b0d7ba2887406110130a978386c4e1befb98c674b4fba677954e4db976630d9"
+checksum = "930cfb6e6abf99298aaad7d29abbef7a9999a9a8806a40088f55f0dcec03146b"
 dependencies = [
  "itoa",
  "memchr",
@@ -2218,8 +2219,13 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "crokey",
  "crossterm",
+ "directories",
+ "futures",
+ "ratatui",
  "serde",
+ "serde_json",
  "sound-fx-3000",
  "tokio",
  "toml",

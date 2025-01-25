@@ -135,6 +135,15 @@ pub struct CreateSubscriptionResponse {
     pub max_total_cost: u32,
 }
 
+impl CreateSubscriptionResponse {
+    pub fn into_subscription(mut self) -> Option<SubscriptionInfo> {
+        if self.data.len() > 1 {
+            unreachable!("mulitple subscriptions returned");
+        }
+        self.data.pop()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct GetSubscriptionsResponse {
     /// A list that contains the single subscription that you created.

@@ -38,7 +38,7 @@ impl ChannelsResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Channel {
     /// An ID that uniquely identifies the broadcaster.
     pub broadcaster_id: String,

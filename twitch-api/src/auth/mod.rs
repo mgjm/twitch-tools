@@ -18,10 +18,6 @@ pub use self::token_manager::TokenManager;
 /// Authorize client against twitch api
 pub struct Auth {}
 
-fn mock() -> bool {
-    !cfg!(feature = "no-mock")
-}
-
 impl Auth {
     pub async fn run(self, scopes: impl IntoIterator<Item = Scope>) -> Result<()> {
         let config = ClientConfig::load_from_env()?;
@@ -31,23 +27,13 @@ impl Auth {
 
         let client = Client::new();
 
-        let res = if mock() {
-            DeviceResponse {
-                device_code: Default::default(),
-                expires_in: Default::default(),
-                interval: Default::default(),
-                user_code: Default::default(),
-                verification_uri: Secret::new("https://mgjm.dev"),
-            }
-        } else {
-            client
-                .send(&DeviceRequest {
-                    client_id: config.client_id.clone(),
-                    scopes: scopes.clone(),
-                })
-                .await
-                .context("device request")?
-        };
+        let res = client
+            .send(&DeviceRequest {
+                client_id: config.client_id.clone(),
+                scopes: scopes.clone(),
+            })
+            .await
+            .context("device request")?;
 
         eprintln!("{res:#?}");
         println!("{}", res.verification_uri.access_secret_value());
@@ -66,25 +52,15 @@ impl Auth {
 
         eprintln!("Ok");
 
-        let res = if mock() {
-            TokenResponse {
-                access_token: Default::default(),
-                expires_in: Default::default(),
-                refresh_token: Default::default(),
-                scope: Default::default(),
-                token_type: Default::default(),
-            }
-        } else {
-            client
-                .send(&TokenRequest {
-                    client_id: config.client_id,
-                    scopes,
-                    device_code: res.device_code,
-                    grant_type: TokenRequest::GRANT_TYPE.into(),
-                })
-                .await
-                .context("token request")?
-        };
+        let res = client
+            .send(&TokenRequest {
+                client_id: config.client_id,
+                scopes,
+                device_code: res.device_code,
+                grant_type: TokenRequest::GRANT_TYPE.into(),
+            })
+            .await
+            .context("token request")?;
 
         eprintln!("{res:#?}");
 

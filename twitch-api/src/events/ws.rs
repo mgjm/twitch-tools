@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message as WsMessage};
@@ -220,25 +220,54 @@ impl NotificationMessage {
     where
         T: Subscription,
     {
-        if self.subscription.type_ != T::TYPE {
-            return Ok(None);
-        };
-        anyhow::ensure!(
-            self.subscription.version == T::VERSION,
-            "subscription version does not match: expected {:?}, got {:?}",
-            T::VERSION,
-            self.subscription.version,
-        );
-
-        serde_json::from_value(self.event.clone())
-            .map(Some)
-            .with_context(|| {
-                format!(
-                    "parse notification event: {:?} {:?}",
-                    self.subscription.type_, self.subscription.version,
-                )
-            })
+        parse_event(
+            &self.subscription.type_,
+            &self.subscription.version,
+            &self.event,
+        )
     }
+
+    pub fn into_event(self) -> NotificationMessageEvent {
+        NotificationMessageEvent {
+            type_: self.subscription.type_,
+            version: self.subscription.version,
+            event: self.event,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NotificationMessageEvent {
+    type_: String,
+    version: String,
+    event: Value,
+}
+
+impl NotificationMessageEvent {
+    pub fn parse<T>(&self) -> Result<Option<T>>
+    where
+        T: Subscription,
+    {
+        parse_event(&self.type_, &self.version, &self.event)
+    }
+}
+
+pub fn parse_event<T>(type_: &str, version: &str, event: &Value) -> Result<Option<T>>
+where
+    T: Subscription,
+{
+    if type_ != T::TYPE {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        version == T::VERSION,
+        "subscription version does not match: expected {:?}, got {version:?}",
+        T::VERSION,
+    );
+
+    serde_json::from_value(event.clone())
+        .map(Some)
+        .with_context(|| format!("parse notification event: {type_:?} {version:?}"))
 }
 
 #[derive(Debug, Deserialize)]
