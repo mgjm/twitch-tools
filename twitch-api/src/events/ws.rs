@@ -236,7 +236,7 @@ impl NotificationMessage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationMessageEvent {
     type_: String,
     version: String,

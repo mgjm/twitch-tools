@@ -92,11 +92,18 @@ pub async fn run(
     let mut events_next = events.next();
 
     loop {
+        state.store.tick();
+
         terminal
             .draw(|frame| state.draw(frame))
             .context("draw frame")?;
 
-        match future::select(events_next, pin!(receiver.recv())).await {
+        match future::select(
+            events_next,
+            future::select(pin!(receiver.recv()), pin!(state.store.search_changed())),
+        )
+        .await
+        {
             Either::Left((event, _)) => {
                 let event = event.unwrap().context("read input event")?;
                 if state.update(event).await?.is_break() {
@@ -104,10 +111,17 @@ pub async fn run(
                 }
                 events_next = events.next();
             }
-            Either::Right((notification, fut)) => {
-                let (timestamp, notification) =
-                    notification.context("unreachable: web socket connection closed")??;
-                state.handle(timestamp, notification).await?;
+            Either::Right((inner, fut)) => {
+                match inner {
+                    Either::Left((notification, _)) => {
+                        let (timestamp, notification) =
+                            notification.context("unreachable: web socket connection closed")??;
+                        state.handle(timestamp, notification).await?;
+                    }
+                    Either::Right(((), _)) => {
+                        // nothing to do, tick is called anyway
+                    }
+                }
                 events_next = fut;
             }
         }
@@ -129,7 +143,7 @@ struct State<'a> {
 }
 
 impl State<'_> {
-    fn draw(&self, frame: &mut Frame) {
+    fn draw(&mut self, frame: &mut Frame) {
         let mut area = frame.area();
 
         if !self.message.is_empty() || self.focus.is_message() {
@@ -180,14 +194,8 @@ impl State<'_> {
             }
         }
 
-        let mut events = self.store.events();
-        if let Some(offset) = self.offset {
-            if let Some(evs) = events.get(..offset.get()) {
-                events = evs;
-            }
-        }
-
-        for event in events.iter().rev() {
+        let events = self.store.events(&mut self.offset);
+        for event in events {
             frame.render_stateful_widget(event, area, &mut area);
             if area.height == 0 {
                 break;
@@ -255,6 +263,9 @@ impl State<'_> {
                         }
                         _ => {}
                     }
+                    if self.focus.is_search() {
+                        self.do_search();
+                    }
                 }
             }
             InputEvent::Key(_) => {}
@@ -278,11 +289,14 @@ impl State<'_> {
         match command {
             Command::Quit => return Ok(ControlFlow::Break(())),
             Command::Leave => {
-                if self.focus.is_none() {
-                    self.offset = None;
-                } else {
+                if !self.focus.is_none() {
                     self.focus = FocusState::None;
                     self.error = String::new();
+                } else if self.offset.is_some() {
+                    self.offset = None;
+                } else {
+                    self.search = String::new();
+                    self.do_search();
                 }
             }
             Command::GoUp => {
@@ -290,7 +304,7 @@ impl State<'_> {
                     if let Some(offset) = self.offset {
                         offset.get()
                     } else {
-                        self.store.events().len()
+                        self.store.events_len()
                     }
                     .saturating_sub(1)
                 })
@@ -299,7 +313,7 @@ impl State<'_> {
             Command::GoDown => {
                 if let Some(offset) = self.offset {
                     let offset = offset.get() + 1;
-                    self.offset = if offset < self.store.events().len() {
+                    self.offset = if offset < self.store.events_len() {
                         NonZeroUsize::new(offset)
                     } else {
                         None
@@ -407,8 +421,13 @@ impl State<'_> {
         timestamp: DateTime<Utc>,
         notification: NotificationMessage,
     ) -> Result<()> {
-        let extra = if let Some(_message) = notification.event::<ChatMessage>()? {
+        let extra = if let Some(message) = notification.event::<ChatMessage>()? {
             self.sound_system.play_sound_for_event(SoundEvent::Message);
+
+            if let Some(poll) = &mut self.poll {
+                poll.vote(&message.chatter_user_id, &message.message.text);
+            }
+
             Value::Null
         } else if let Some(_notification) = notification.event::<ChatNotification>()? {
             self.sound_system.play_sound_for_event(SoundEvent::Message);
@@ -448,6 +467,10 @@ impl State<'_> {
             event: notification.into_event(),
             extra,
         })
+    }
+
+    fn do_search(&mut self) {
+        self.store.start_search(&self.search);
     }
 }
 
@@ -557,13 +580,6 @@ impl Event {
                 let mut spans = Vec::new();
                 let mut lines = Vec::new();
                 if let Some(message) = notification.parse::<ChatMessage>()? {
-                    // sound_system.play_sound_for_event(Event::Message);
-                    // eprintln!("{message:#?}");
-
-                    // if let Some(poll) = &mut poll {
-                    //     poll.vote(&message.chatter_user_id, &message.message.text);
-                    // }
-
                     let color = parse_color(&message.color, &message.chatter_user_id);
                     spans.extend([
                         timestamp.to_span(),
@@ -573,9 +589,6 @@ impl Event {
                     message_to_spans(&message.message, &mut spans);
                     spans.into()
                 } else if let Some(notification) = notification.parse::<ChatNotification>()? {
-                    // sound_system.play_sound_for_event(Event::Message);
-                    // eprintln!("{notification:#?}");
-
                     let color = parse_color(&notification.color, &notification.chatter_user_id);
                     spans.extend([
                         timestamp.to_span(),
@@ -591,15 +604,6 @@ impl Event {
                     message_to_spans(&notification.message, &mut spans);
                     spans.into()
                 } else if let Some(follow) = notification.parse::<Follow>()? {
-                    // sound_system.play_sound_for_event(Event::Follow);
-                    // eprintln!("{follow:#?}");
-
-                    // let follower = client
-                    //     .send(&ChatColorsRequest::id(follow.user_id.clone()))
-                    //     .await
-                    //     .context("load chat color for follow message")?
-                    //     .into_chat_color()
-                    //     .context("unable to load char color for follow message")?;
                     let follower_color = "";
                     let color = parse_color(follower_color, &follow.user_id);
                     Line::from_iter([
@@ -608,15 +612,6 @@ impl Event {
                         Span::raw(" "),
                     ])
                 } else if let Some(online) = notification.parse::<StreamOnline>()? {
-                    // sound_system.play_sound_for_event(Event::Online);
-                    // eprintln!("{online:#?}");
-
-                    // let stream = client
-                    //     .send(&StreamsRequest::user_id(user.id.clone()))
-                    //     .await
-                    //     .context("load stream info")?
-                    //     .into_stream()
-                    //     .context("missing stream")?;
                     let stream: Stream =
                         serde_json::from_value(extra.clone()).context("parse stream info")?;
 
@@ -627,17 +622,7 @@ impl Event {
                     stream_info(&stream, &mut lines);
                     return Ok(lines.into());
                 } else if let Some(offline) = notification.parse::<StreamOffline>()? {
-                    // sound_system.play_sound_for_event(Event::Offline);
-                    // eprintln!("{offline:#?}");
                     let _ = offline;
-
-                    // let channel = self
-                    //     .client
-                    //     .send(&ChannelsRequest::id(user.id.clone()))
-                    //     .await
-                    //     .context("load channel info")?
-                    //     .into_channel()
-                    //     .context("missing channel")?;
 
                     let channel: Channel =
                         serde_json::from_value(extra.clone()).context("parse channel info")?;
