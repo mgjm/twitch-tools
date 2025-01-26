@@ -6,6 +6,7 @@ use std::{
     num::NonZeroUsize,
     ops::ControlFlow,
     pin::pin,
+    sync::LazyLock,
 };
 
 use anyhow::{Context, Result};
@@ -18,6 +19,7 @@ use futures::{
     StreamExt,
     future::{self, Either},
 };
+use nucleo::{Config, Utf32String};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
@@ -164,7 +166,9 @@ impl State<'_> {
         }
 
         if !self.error.is_empty() {
-            let error = Paragraph::new(self.error.as_str()).wrap(Wrap { trim: false });
+            let error = Paragraph::new(self.error.as_str())
+                .red()
+                .wrap(Wrap { trim: false });
             let height = error.line_count(area.width);
 
             let error_area;
@@ -256,10 +260,12 @@ impl State<'_> {
                         KeyCode::Right if *offset < text.chars().count() => {
                             *offset += 1;
                         }
-                        KeyCode::Tab => {}
                         KeyCode::Char(c) => {
                             text.insert(text.char_to_byte_index(*offset), c);
                             *offset += 1;
+                        }
+                        KeyCode::Tab if self.focus.is_message() => {
+                            self.autocomplete();
                         }
                         _ => {}
                     }
@@ -294,7 +300,9 @@ impl State<'_> {
                     self.error = String::new();
                 } else if self.offset.is_some() {
                     self.offset = None;
-                } else {
+                } else if !self.message.is_empty() {
+                    self.message = String::new();
+                } else if !self.search.is_empty() {
                     self.search = String::new();
                     self.do_search();
                 }
@@ -373,6 +381,16 @@ impl State<'_> {
                         })
                         .await
                         .context("send chat announcement")?;
+                    self.clear_message();
+                    return Ok(());
+                }
+                ("pin", _) if !text.is_empty() => {
+                    self.error = "/pin not yet exposed by the twitch API".into();
+                    self.clear_message();
+                    return Ok(());
+                }
+                ("unpin", "") => {
+                    self.error = "/unpin not yet exposed by the twitch API".into();
                     self.clear_message();
                     return Ok(());
                 }
@@ -471,6 +489,52 @@ impl State<'_> {
 
     fn do_search(&mut self) {
         self.store.start_search(&self.search);
+    }
+
+    fn autocomplete(&mut self) {
+        let index = {
+            let FocusState::Message(offset) = self.focus else {
+                return;
+            };
+            self.message.char_to_byte_index(offset)
+        };
+
+        let message = &self.message[..index];
+        if message.starts_with('/') && !message.contains(char::is_whitespace) {
+            let mut matcher = nucleo::Matcher::new(Config::DEFAULT);
+            let needle: Utf32String = message[1..].into();
+            if needle.is_empty() {
+                return;
+            }
+
+            static HAYSTACKS: LazyLock<Vec<Utf32String>> = LazyLock::new(|| {
+                ["poll", "end poll", "announce"]
+                    .into_iter()
+                    .map(|s| s.into())
+                    .collect()
+            });
+
+            let max_match = HAYSTACKS
+                .iter()
+                .filter_map(|haystack| {
+                    matcher
+                        .fuzzy_match(haystack.slice(..), needle.slice(..))
+                        .map(|s| (s, haystack))
+                })
+                .max();
+
+            if let Some((_score, match_)) = max_match {
+                self.message = format!("/{match_} {}", &self.message[index..]);
+                self.focus = FocusState::Message(match_.len() + 2);
+            }
+
+            return;
+        }
+
+        let word = message.split_whitespace().next_back().unwrap();
+        if let Some(_needle) = word.strip_prefix('@') {
+            // TODO: complete user name
+        }
     }
 }
 
@@ -609,7 +673,7 @@ impl Event {
                     Line::from_iter([
                         follow.followed_at.to_span(),
                         Span::raw(follow.user_name).bold().fg(color),
-                        Span::raw(" "),
+                        Span::raw(" has followed you").italic(),
                     ])
                 } else if let Some(online) = notification.parse::<StreamOnline>()? {
                     let stream: Stream =
